@@ -46,7 +46,8 @@ import heygen_cms_api as heygen
 CONFIDENCE_THRESHOLD = 0.70
 BOT_USER_ID = "U0BDYHHJQTY"   # @HeyChaplinCode
 OWNER_SLACK_ID = "U0BBD6002R2"  # yichi.huang — authorized to confirm write ops
-REQUEST_TIMEOUT = 25  # seconds — hard cap (BUG-4)
+REQUEST_TIMEOUT = 10  # seconds — hard cap per attempt
+REQUEST_MAX_RETRIES = 3  # total attempts before giving up
 
 # ---------------------------------------------------------------------------
 # Token helpers
@@ -86,34 +87,55 @@ def is_authorized(user_id: str) -> bool:
 
 
 def _handle_mention_with_timeout(event: dict) -> None:
-    """Run handle_mention with a hard timeout, posting an error if exceeded."""
-    exc_box: list[BaseException | None] = [None]
+    """Run handle_mention with a 10s timeout per attempt, retrying up to REQUEST_MAX_RETRIES times."""
+    channel = event.get("channel", "")
+    ts = event.get("ts", "")
 
-    def _run():
-        try:
-            handle_mention(event)
-        except Exception as e:
-            exc_box[0] = e
+    for attempt in range(1, REQUEST_MAX_RETRIES + 1):
+        exc_box: list[BaseException | None] = [None]
+        done = threading.Event()
 
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    t.join(timeout=REQUEST_TIMEOUT)
-    if t.is_alive():
-        print(f"[TIMEOUT] handle_mention exceeded {REQUEST_TIMEOUT}s for ts={event.get('ts')}")
-        try:
-            post_message(
-                event["channel"],
-                f"⏱️ Request timed out after {REQUEST_TIMEOUT}s. Please try again.",
-                thread_ts=event["ts"],
-            )
-        except Exception:
-            pass
-    elif exc_box[0]:
-        print(f"[ERROR] handle_mention: {exc_box[0]}")
-        try:
-            post_message(event["channel"], f"❌ Error: {exc_box[0]}", thread_ts=event["ts"])
-        except Exception:
-            pass
+        def _run():
+            try:
+                handle_mention(event)
+            except Exception as e:
+                exc_box[0] = e
+            finally:
+                done.set()
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        finished = done.wait(timeout=REQUEST_TIMEOUT)
+
+        if finished and exc_box[0] is None:
+            return  # success
+
+        if not finished:
+            print(f"[TIMEOUT] attempt {attempt}/{REQUEST_MAX_RETRIES} exceeded {REQUEST_TIMEOUT}s for ts={ts}")
+            if attempt < REQUEST_MAX_RETRIES:
+                try:
+                    post_message(channel, f"⏱️ Timed out (attempt {attempt}/{REQUEST_MAX_RETRIES}), retrying...", thread_ts=ts)
+                except Exception:
+                    pass
+            else:
+                try:
+                    post_message(channel, f"⏱️ Timed out after {REQUEST_MAX_RETRIES} attempts. Please try again.", thread_ts=ts)
+                except Exception:
+                    pass
+            continue
+
+        # finished but with an exception
+        print(f"[ERROR] attempt {attempt}/{REQUEST_MAX_RETRIES} handle_mention: {exc_box[0]}")
+        if attempt < REQUEST_MAX_RETRIES:
+            try:
+                post_message(channel, f"❌ Error (attempt {attempt}/{REQUEST_MAX_RETRIES}), retrying... `{exc_box[0]}`", thread_ts=ts)
+            except Exception:
+                pass
+        else:
+            try:
+                post_message(channel, f"❌ Failed after {REQUEST_MAX_RETRIES} attempts: `{exc_box[0]}`", thread_ts=ts)
+            except Exception:
+                pass
 
 
 def handle_mention(event: dict[str, Any]) -> None:
@@ -364,8 +386,8 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
     elif action == "create_account":
         return heygen.execute_create_account(
             email=email,
-            tier=intent.get("tier", "creator"),
-            duration_days=intent.get("duration_days", 30),
+            tier=intent.get("tier"),
+            duration_days=intent.get("duration_days"),
         )
     else:
         return {"action": action, "status": "not_implemented"}

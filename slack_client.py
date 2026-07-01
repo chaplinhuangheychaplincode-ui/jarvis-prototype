@@ -266,9 +266,9 @@ def _format_action_summary(intent: dict[str, Any], before: dict[str, Any]) -> st
         return f"*Quota Grant* for `{target}`\n{change_str}"
 
     elif action == "create_account":
-        tier = intent.get("tier", "?")
-        days = intent.get("duration_days", "?")
-        return f"*Create Account* — `{target}` as *{tier}* for *{days}d*"
+        reason = intent.get("reason")
+        detail = f"\nreason → _{reason}_" if reason else ""
+        return f"*Create Account* — `{target}`{detail}"
 
     elif action == "lookup":
         return f"*Lookup* — `{target}` _(read-only, no changes)_"
