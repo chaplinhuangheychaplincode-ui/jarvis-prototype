@@ -129,6 +129,10 @@ def handle_mention(event: dict[str, Any]) -> None:
                 lines.append(f"• *{k}:* `{v}`")
         lines.append(f"\n_Audit: `{audit_id}` (read logged)_")
         post_message(channel, "\n".join(lines), thread_ts=ts)
+        # Separate audit trail message (searchable)
+        post_message(channel,
+            f":mag: *Audit trail* | `{audit_id}` | `lookup` | `{intent.get('target_email')}` | by <@{user_id}>",
+            thread_ts=ts)
         return
 
     # Write actions — dry-run + confirmation card
@@ -254,6 +258,10 @@ def handle_reaction(event: dict[str, Any]) -> None:
         thread_ts=pending["thread_ts"],
         blocks=blocks,
     )
+    # Separate audit trail message (searchable)
+    post_message(channel,
+        f":white_check_mark: *Audit trail* | `{audit_id}` | `{intent.get('action')}` | `{target_email}` | by <@{user_id}>",
+        thread_ts=pending["thread_ts"])
     print(f"[EXECUTED] audit_id={audit_id}")
 
 
