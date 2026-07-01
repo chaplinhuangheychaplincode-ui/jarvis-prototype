@@ -35,6 +35,17 @@ def _conn() -> sqlite3.Connection:
             status          TEXT NOT NULL DEFAULT 'pending'
         )
     """)
+    # Dedup: same user + thread + action cannot create two active pending rows.
+    # Same op at a DIFFERENT time gets a different thread_ts so it IS a separate row.
+    # Same op in the SAME thread (e.g. bot restart replaying the event) is blocked.
+    try:
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_dedup
+            ON pending_confirmations(actor_slack_id, thread_ts, json_extract(intent_json, '$.action'), json_extract(intent_json, '$.target_email'))
+            WHERE status IN ('pending', 'executing')
+        """)
+    except sqlite3.OperationalError:
+        pass  # index already exists — safe to ignore
     # Persistent reaction dedup — survives bot restarts so reactions never replay
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seen_reactions (
@@ -84,7 +95,7 @@ def write_pending(
 
     conn = _conn()
     conn.execute(
-        """INSERT INTO pending_confirmations
+        """INSERT OR IGNORE INTO pending_confirmations
            (pending_id, actor_slack_id, intent_json, before_json,
             channel_id, thread_ts, message_ts, created_at, expires_at, status)
            VALUES (?,?,?,?,?,?,?,?,?,?)""",
@@ -92,8 +103,18 @@ def write_pending(
          channel_id, thread_ts, message_ts, now, expires, "pending"),
     )
     conn.commit()
+    # If a row with this dedup key already existed, return that existing pending_id
+    existing = conn.execute(
+        """SELECT pending_id FROM pending_confirmations
+           WHERE actor_slack_id=? AND thread_ts=?
+             AND json_extract(intent_json, '$.action')=?
+             AND json_extract(intent_json, '$.target_email')=?
+             AND status IN ('pending', 'executing')""",
+        (actor_slack_id, thread_ts,
+         intent.get("action"), intent.get("target_email")),
+    ).fetchone()
     conn.close()
-    return pending_id
+    return existing["pending_id"] if existing else pending_id
 
 
 def get_by_pending_id(pending_id: str) -> dict[str, Any] | None:
