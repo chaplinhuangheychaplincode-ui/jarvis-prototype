@@ -94,16 +94,8 @@ def write_pending(
     expires = (datetime.now(timezone.utc) + timedelta(minutes=EXPIRY_MINUTES)).isoformat()
 
     conn = _conn()
-    conn.execute(
-        """INSERT OR IGNORE INTO pending_confirmations
-           (pending_id, actor_slack_id, intent_json, before_json,
-            channel_id, thread_ts, message_ts, created_at, expires_at, status)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (pending_id, actor_slack_id, json.dumps(intent), json.dumps(before_state),
-         channel_id, thread_ts, message_ts, now, expires, "pending"),
-    )
-    conn.commit()
-    # If a row with this dedup key already existed, return that existing pending_id
+    # Check-before-insert: INSERT OR IGNORE doesn't reliably suppress
+    # IntegrityError on partial unique indexes in all SQLite builds.
     existing = conn.execute(
         """SELECT pending_id FROM pending_confirmations
            WHERE actor_slack_id=? AND thread_ts=?
@@ -113,8 +105,21 @@ def write_pending(
         (actor_slack_id, thread_ts,
          intent.get("action"), intent.get("target_email")),
     ).fetchone()
+    if existing:
+        conn.close()
+        return existing["pending_id"]
+
+    conn.execute(
+        """INSERT INTO pending_confirmations
+           (pending_id, actor_slack_id, intent_json, before_json,
+            channel_id, thread_ts, message_ts, created_at, expires_at, status)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (pending_id, actor_slack_id, json.dumps(intent), json.dumps(before_state),
+         channel_id, thread_ts, message_ts, now, expires, "pending"),
+    )
+    conn.commit()
     conn.close()
-    return existing["pending_id"] if existing else pending_id
+    return pending_id
 
 
 def get_by_pending_id(pending_id: str) -> dict[str, Any] | None:
