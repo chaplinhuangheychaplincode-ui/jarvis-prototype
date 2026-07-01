@@ -147,10 +147,10 @@ def get_user_state(email: str) -> dict[str, Any]:
         return {"email": email, "user_id": None, "tier": "unknown", "error": resp}
     d = resp.get("data", {})
     spaces = d.get("spaces", [])
-    space_id = spaces[0].get("owner") if spaces else None
+    space_id = spaces[0].get("space_id") if spaces else None
     return {
         "email": email,
-        "user_id": spaces[0].get("username") if spaces else None,
+        "user_id": d.get("username"),
         "space_id": space_id,
         "tier": d.get("tier", "free"),
         "api_tier": d.get("api_tier", "free"),
