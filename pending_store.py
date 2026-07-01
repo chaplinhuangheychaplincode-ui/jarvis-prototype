@@ -44,8 +44,8 @@ def _conn() -> sqlite3.Connection:
             ON pending_confirmations(actor_slack_id, thread_ts, json_extract(intent_json, '$.action'), json_extract(intent_json, '$.target_email'))
             WHERE status IN ('pending', 'executing')
         """)
-    except sqlite3.OperationalError:
-        pass  # index already exists — safe to ignore
+    except (sqlite3.OperationalError, sqlite3.IntegrityError):
+        pass  # index already exists or duplicate data present — safe to ignore
     # Persistent reaction dedup — survives bot restarts so reactions never replay
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seen_reactions (
