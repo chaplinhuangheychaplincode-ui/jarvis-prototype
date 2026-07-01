@@ -126,6 +126,11 @@ def handle_mention(event: dict[str, Any]) -> None:
     # Strip the bot mention prefix
     clean_text = re.sub(r"<@[A-Z0-9]+>", "", text).strip()
 
+    # Strip Slack mailto escaping: <mailto:user@example.com|user@example.com> → user@example.com
+    clean_text = re.sub(r"<mailto:[^|>]+\|([^>]+)>", r"\1", clean_text)
+    # Also strip bare angle-bracket URLs Slack sometimes emits
+    clean_text = re.sub(r"<([^|>]+)>", r"\1", clean_text)
+
     if not clean_text:
         return
 
