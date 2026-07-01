@@ -40,6 +40,15 @@ def _conn() -> sqlite3.Connection:
             reason              TEXT
         )
     """)
+    # Dedup: same Slack message_ts + action + target can only produce one audit row
+    try:
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_dedup
+            ON jarvis_audit_log(slack_message_ts, action, target_email)
+            WHERE slack_message_ts IS NOT NULL
+        """)
+    except sqlite3.OperationalError:
+        pass  # index already exists — safe to ignore
     conn.commit()
     return conn
 
@@ -59,7 +68,7 @@ def write_audit(
     audit_id = f"jrv_a_{uuid.uuid4().hex[:12]}"
     conn = _conn()
     conn.execute(
-        """INSERT INTO jarvis_audit_log
+        """INSERT OR IGNORE INTO jarvis_audit_log
            (audit_id, ts, actor_slack_id, action, target_email, params_json,
             before_json, after_json, result, nl_utterance, nl_confidence,
             slack_channel_id, slack_message_ts, batch_id, reason)
