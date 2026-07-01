@@ -35,8 +35,37 @@ def _conn() -> sqlite3.Connection:
             status          TEXT NOT NULL DEFAULT 'pending'
         )
     """)
+    # Persistent reaction dedup — survives bot restarts so reactions never replay
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS seen_reactions (
+            dedup_key  TEXT PRIMARY KEY,
+            seen_at    TEXT NOT NULL
+        )
+    """)
     conn.commit()
     return conn
+
+
+def reaction_seen(dedup_key: str) -> bool:
+    """Return True if this reaction was already handled (persisted across restarts)."""
+    conn = _conn()
+    row = conn.execute(
+        "SELECT 1 FROM seen_reactions WHERE dedup_key=?", (dedup_key,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def mark_reaction_seen(dedup_key: str) -> None:
+    """Record that this reaction has been handled."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO seen_reactions (dedup_key, seen_at) VALUES (?,?)",
+        (dedup_key, now)
+    )
+    conn.commit()
+    conn.close()
 
 
 def write_pending(
