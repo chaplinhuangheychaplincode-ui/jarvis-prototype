@@ -295,7 +295,7 @@ def execute_subscription_remove(email: str) -> dict[str, Any]:
     }
 
 
-def execute_create_account(email: str, tier: str, duration_days: int) -> dict[str, Any]:
+def execute_create_account(email: str, tier: str | None = None, duration_days: int | None = None) -> dict[str, Any]:
     """
     Create a new HeyGen account, then optionally comp a subscription.
     Step 1: create_account → gets credentials
