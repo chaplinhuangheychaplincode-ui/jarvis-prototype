@@ -1,34 +1,59 @@
 """
-HeyGen CMS API client — replaces the mock with real calls to cms-api.heygendev.com.
+HeyGen CMS API client — real calls to cms-api.heygendev.com.
 
-Discovered endpoints (all under https://cms-api.heygendev.com):
+Confirmed endpoints (all POST, auth via x-api-key header):
+
   READ:
-    POST /v1/internal/movio/user.get           {"email": str}
-  WRITE (quota grants):
-    POST /v1/internal/movio/gift_quota.add     {"email": str, "feature": str, "total": int, "expired_days": int, "note"?: str}
-    POST /v1/internal/movio/gift_quota.expire  {"quota_id": str}   — revoke a specific grant
-    POST /v1/internal/movio/gift_quota.deduct  {"quota_id": str, "amount": int}
-  WRITE (account):
-    POST /v1/internal/create_account           {"email": str}   → returns {email, password, space_id}
-  WRITE (subscription — shape TBD, "quotas" field required):
-    POST /v1/internal/movio/gift_subscription.add
-    POST /v1/internal/movio/gift_subscription.remove
-    POST /v1/internal/movio/gift_subscription.upgrade
+    /v1/internal/movio/user.get
+        body: {"email": str}
 
-Confirmed quota features (for gift_quota.add):
-    "generative_credit", "plan_credit", "api", "seat",
-    "regular", "unlimited_regular", "video_translate",
-    "avatar_video", "personalized_video"
+  WRITE — quota (credits only, no tier change):
+    /v1/internal/movio/gift_quota.add
+        body: {"email": str, "feature": str, "total": int, "expired_days": int, "note"?: str}
+        → returns {quota_id, total, remaining, expires, message}
+        features: "generative_credit" | "plan_credit" | "api" | "seat" |
+                  "regular" | "unlimited_regular" | "video_translate" |
+                  "avatar_video" | "personalized_video"
+    /v1/internal/movio/gift_quota.expire
+        body: {"quota_id": str}   — revoke a specific grant by ID
+    /v1/internal/movio/gift_quota.deduct
+        body: {"quota_id": str, "amount": int}
 
-All functions preserve the same interface as mock_heygen_api.py so bot.py needs
-no changes.
+  WRITE — subscription (full comp: tier + quota bundle, replaces existing sub):
+    /v1/internal/movio/gift_subscription.add
+        body: {
+            "email": str,           # required (or "username")
+            "tier": str,            # optional: "creator"|"pro"|"business" (default creator)
+            "expired_days": int,    # optional: duration (default system default)
+            "quotas": dict,         # REQUIRED (may be empty {}); {"generative_credit": N, ...}
+            "trial": bool,          # optional, default True
+            "api_sub": bool,        # optional, default False
+            "cancel_self_serve": bool,  # optional
+        }
+        → returns {space_id, api_sub, seat_limit, usage_mode, granted_seconds}
+        Side effects: cancels existing subscription, creates new one, adds quotas,
+                      applies seat limit, brand kit, oracle adoption triggers.
+    /v1/internal/movio/gift_subscription.remove
+        body: {"email": str}   — strips sub back to free tier
+    /v1/internal/movio/gift_subscription.upgrade
+        body: {"email": str, "tier": str, "expired_days"?: int, "quotas"?: dict}
+        Note: requires the user to have an existing active subscription.
+
+  WRITE — account:
+    /v1/internal/create_account
+        body: {"email": str}   → {email, password, space_id}
+
+Decision logic for execute_quota_grant:
+  - tier specified AND credits specified → gift_subscription.add (bundled)
+  - tier specified, no credits           → gift_subscription.add (tier default quota)
+  - credits only, no tier                → gift_quota.add (top-up, no plan change)
 """
 from __future__ import annotations
 
-import copy
 import json
 import subprocess
 import time
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -67,8 +92,15 @@ def _post(path: str, data: dict[str, Any]) -> dict[str, Any]:
         headers={"Content-Type": "application/json", "x-api-key": key},
         method="POST",
     )
-    resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
-    return resp
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+        return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read()
+        try:
+            return json.loads(body)
+        except Exception:
+            return {"code": e.code, "message": body.decode()[:300]}
 
 
 def _get(path: str) -> dict[str, Any]:
@@ -82,7 +114,30 @@ def _get(path: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Public API (same interface as mock_heygen_api.py)
+# Feature name normalisation
+# ---------------------------------------------------------------------------
+_FEATURE_MAP = {
+    "credits": "generative_credit",
+    "generative_credit": "generative_credit",
+    "generative": "generative_credit",
+    "plan_credit": "plan_credit",
+    "plan": "plan_credit",
+    "api": "api",
+    "seat": "seat",
+    "video_translate": "video_translate",
+    "avatar_video": "avatar_video",
+    "personalized_video": "personalized_video",
+}
+
+VALID_TIERS = {"creator", "pro", "business", "enterprise"}
+
+
+def _normalize_feature(product: str | None) -> str:
+    return _FEATURE_MAP.get((product or "generative_credit").lower(), "generative_credit")
+
+
+# ---------------------------------------------------------------------------
+# Public read API
 # ---------------------------------------------------------------------------
 
 def get_user_state(email: str) -> dict[str, Any]:
@@ -97,7 +152,8 @@ def get_user_state(email: str) -> dict[str, Any]:
         "email": email,
         "user_id": spaces[0].get("username") if spaces else None,
         "space_id": space_id,
-        "tier": d.get("api_tier", "free"),
+        "tier": d.get("tier", "free"),
+        "api_tier": d.get("api_tier", "free"),
         "internal": d.get("internal", False),
         "country_code": d.get("country_code"),
         "registration_ts": d.get("registration_ts"),
@@ -111,6 +167,10 @@ def lookup_user(email: str) -> dict[str, Any]:
     return get_user_state(email)
 
 
+# ---------------------------------------------------------------------------
+# Public write API
+# ---------------------------------------------------------------------------
+
 def execute_quota_grant(
     email: str,
     tier: str | None,
@@ -119,40 +179,103 @@ def execute_quota_grant(
     product: str = "generative_credit",
 ) -> dict[str, Any]:
     """
-    Grant quota/credits to a user via CMS gift_quota.add.
+    Grant credits/subscription to a user.
 
-    feature mapping:
-      product="credits" or "generative_credit" → feature="generative_credit"
-      product="plan_credit"                     → feature="plan_credit"
-      product="api"                             → feature="api"
+    Decision:
+      - tier specified → gift_subscription.add (full comp: tier + optional credit bundle)
+      - credits only   → gift_quota.add (top-up credits, no plan change)
     """
-    feature_map = {
-        "credits": "generative_credit",
-        "generative_credit": "generative_credit",
-        "plan_credit": "plan_credit",
-        "api": "api",
-        "seat": "seat",
-    }
-    feature = feature_map.get(product or "credits", "generative_credit")
-    if credits is None:
-        credits = 0
-    if duration_days is None:
-        duration_days = 30
+    has_tier = tier and tier.lower() in VALID_TIERS
+    duration_days = duration_days or 30
 
+    if has_tier:
+        return _execute_subscription_grant(
+            email=email,
+            tier=tier,
+            duration_days=duration_days,
+            credits=credits,
+            product=product,
+        )
+    else:
+        return _execute_credit_top_up(
+            email=email,
+            credits=credits or 0,
+            duration_days=duration_days,
+            product=product,
+            tier_note=tier,
+        )
+
+
+def _execute_subscription_grant(
+    email: str,
+    tier: str,
+    duration_days: int,
+    credits: int | None,
+    product: str,
+) -> dict[str, Any]:
+    """
+    Full comp via gift_subscription.add.
+    Cancels existing sub, creates new one, bundles quota.
+    """
+    quotas: dict[str, int] = {}
+    if credits:
+        feature = _normalize_feature(product)
+        quotas[feature] = credits
+
+    resp = _post("/v1/internal/movio/gift_subscription.add", {
+        "email": email,
+        "tier": tier.lower(),
+        "expired_days": duration_days,
+        "quotas": quotas,
+        "trial": True,
+    })
+
+    if resp.get("code") != 100:
+        return {"email": email, "error": resp, "granted": False, "action": "subscription_grant"}
+
+    data = resp.get("data", {})
+    result: dict[str, Any] = {
+        "email": email,
+        "granted": True,
+        "action": "subscription_grant",
+        "tier": tier,
+        "duration_days": duration_days,
+        "space_id": data.get("space_id"),
+        "api_sub": data.get("api_sub"),
+        "seat_limit": data.get("seat_limit"),
+    }
+    if credits:
+        result["credits_granted"] = credits
+        result["credits_feature"] = _normalize_feature(product)
+    return result
+
+
+def _execute_credit_top_up(
+    email: str,
+    credits: int,
+    duration_days: int,
+    product: str,
+    tier_note: str | None = None,
+) -> dict[str, Any]:
+    """
+    Credits-only top-up via gift_quota.add (no tier change).
+    """
+    feature = _normalize_feature(product)
     resp = _post("/v1/internal/movio/gift_quota.add", {
         "email": email,
         "feature": feature,
         "total": credits,
         "expired_days": duration_days,
-        "note": f"jarvis grant: tier={tier}",
+        "note": f"jarvis credit top-up tier_note={tier_note}",
     })
     if resp.get("code") != 100:
-        return {"email": email, "error": resp, "granted": False}
+        return {"email": email, "error": resp, "granted": False, "action": "credit_top_up"}
 
     data = resp.get("data", {})
     return {
         "email": email,
         "granted": True,
+        "action": "credit_top_up",
         "feature": feature,
         "quota_id": data.get("quota_id"),
         "total_after": data.get("total"),
@@ -162,21 +285,52 @@ def execute_quota_grant(
     }
 
 
+def execute_subscription_remove(email: str) -> dict[str, Any]:
+    """Strip user's subscription back to free tier."""
+    resp = _post("/v1/internal/movio/gift_subscription.remove", {"email": email})
+    return {
+        "email": email,
+        "removed": resp.get("code") == 100,
+        "response": resp,
+    }
+
+
 def execute_create_account(email: str, tier: str, duration_days: int) -> dict[str, Any]:
     """
-    Create a new HeyGen account via CMS.
-    Returns {email, user_id, space_id, created}.
+    Create a new HeyGen account, then optionally comp a subscription.
+    Step 1: create_account → gets credentials
+    Step 2: if tier != free, gift_subscription.add
     """
+    # Step 1: create the account
     resp = _post("/v1/internal/create_account", {"email": email})
-    if resp.get("code") == 100:
-        d = resp.get("data", {})
-        return {
-            "email": d.get("email", email),
-            "user_id": d.get("space_id"),   # space_id doubles as user identifier
-            "space_id": d.get("space_id"),
-            "tier": tier,
-            "subscription_days_remaining": duration_days,
-            "created": True,
-        }
-    # Already exists or other error
-    return {"email": email, "error": resp, "created": False}
+    if resp.get("code") != 100:
+        # already exists is a common case — try to comp anyway
+        if "already exists" not in str(resp.get("message", "")):
+            return {"email": email, "error": resp, "created": False}
+        account_data: dict[str, Any] = {}
+        created = False
+    else:
+        account_data = resp.get("data", {})
+        created = True
+
+    result: dict[str, Any] = {
+        "email": account_data.get("email", email),
+        "space_id": account_data.get("space_id"),
+        "created": created,
+        "tier": tier,
+        "subscription_days_remaining": duration_days,
+    }
+
+    # Step 2: if non-free tier, comp the subscription
+    if tier and tier.lower() in VALID_TIERS and tier.lower() != "free":
+        sub_resp = _post("/v1/internal/movio/gift_subscription.add", {
+            "email": email,
+            "tier": tier.lower(),
+            "expired_days": duration_days,
+            "quotas": {},
+            "trial": True,
+        })
+        result["subscription_granted"] = sub_resp.get("code") == 100
+        result["subscription_response"] = sub_resp.get("data", {})
+
+    return result
