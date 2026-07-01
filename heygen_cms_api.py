@@ -1,8 +1,27 @@
 """
 HeyGen CMS API client — replaces the mock with real calls to cms-api.heygendev.com.
 
+Discovered endpoints (all under https://cms-api.heygendev.com):
+  READ:
+    POST /v1/internal/movio/user.get           {"email": str}
+  WRITE (quota grants):
+    POST /v1/internal/movio/gift_quota.add     {"email": str, "feature": str, "total": int, "expired_days": int, "note"?: str}
+    POST /v1/internal/movio/gift_quota.expire  {"quota_id": str}   — revoke a specific grant
+    POST /v1/internal/movio/gift_quota.deduct  {"quota_id": str, "amount": int}
+  WRITE (account):
+    POST /v1/internal/create_account           {"email": str}   → returns {email, password, space_id}
+  WRITE (subscription — shape TBD, "quotas" field required):
+    POST /v1/internal/movio/gift_subscription.add
+    POST /v1/internal/movio/gift_subscription.remove
+    POST /v1/internal/movio/gift_subscription.upgrade
+
+Confirmed quota features (for gift_quota.add):
+    "generative_credit", "plan_credit", "api", "seat",
+    "regular", "unlimited_regular", "video_translate",
+    "avatar_video", "personalized_video"
+
 All functions preserve the same interface as mock_heygen_api.py so bot.py needs
-no changes. Falls back to mock data if the API key is not configured.
+no changes.
 """
 from __future__ import annotations
 
@@ -97,34 +116,67 @@ def execute_quota_grant(
     tier: str | None,
     credits: int | None,
     duration_days: int | None,
-    product: str = "credits",
+    product: str = "generative_credit",
 ) -> dict[str, Any]:
     """
-    Execute a quota grant via CMS internal API.
-    NOTE: Real write endpoint TBD — returns current state for now.
-    Replace with actual grant endpoint once identified.
+    Grant quota/credits to a user via CMS gift_quota.add.
+
+    feature mapping:
+      product="credits" or "generative_credit" → feature="generative_credit"
+      product="plan_credit"                     → feature="plan_credit"
+      product="api"                             → feature="api"
     """
-    # TODO: wire up real grant endpoint e.g. POST /v1/internal/movio/user.grant
-    # For now return current state so the dry-run confirm flow works
-    return get_user_state(email)
+    feature_map = {
+        "credits": "generative_credit",
+        "generative_credit": "generative_credit",
+        "plan_credit": "plan_credit",
+        "api": "api",
+        "seat": "seat",
+    }
+    feature = feature_map.get(product or "credits", "generative_credit")
+    if credits is None:
+        credits = 0
+    if duration_days is None:
+        duration_days = 30
+
+    resp = _post("/v1/internal/movio/gift_quota.add", {
+        "email": email,
+        "feature": feature,
+        "total": credits,
+        "expired_days": duration_days,
+        "note": f"jarvis grant: tier={tier}",
+    })
+    if resp.get("code") != 100:
+        return {"email": email, "error": resp, "granted": False}
+
+    data = resp.get("data", {})
+    return {
+        "email": email,
+        "granted": True,
+        "feature": feature,
+        "quota_id": data.get("quota_id"),
+        "total_after": data.get("total"),
+        "remaining_after": data.get("remaining"),
+        "expires": data.get("expires"),
+        "warning": data.get("message", ""),
+    }
 
 
 def execute_create_account(email: str, tier: str, duration_days: int) -> dict[str, Any]:
     """
-    Create a new account via CMS.
-    NOTE: Real endpoint TBD — stub returns shape for dry-run.
+    Create a new HeyGen account via CMS.
+    Returns {email, user_id, space_id, created}.
     """
-    # TODO: wire up POST /v1/internal/create_account
-    resp = _post("/v1/internal/create_account", {"email": email, "seats": 1})
+    resp = _post("/v1/internal/create_account", {"email": email})
     if resp.get("code") == 100:
         d = resp.get("data", {})
         return {
             "email": d.get("email", email),
-            "user_id": d.get("username"),
+            "user_id": d.get("space_id"),   # space_id doubles as user identifier
             "space_id": d.get("space_id"),
             "tier": tier,
-            "credits": 0,
             "subscription_days_remaining": duration_days,
             "created": True,
         }
+    # Already exists or other error
     return {"email": email, "error": resp, "created": False}
