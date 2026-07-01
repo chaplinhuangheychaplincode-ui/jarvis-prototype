@@ -143,6 +143,38 @@ def build_clarifying_question_card(question: str) -> list[dict[str, Any]]:
 
 def build_audit_ack_card(audit_id: str, action: str, target: str,
                           after_state: dict[str, Any]) -> list[dict[str, Any]]:
+    if action == "lookup":
+        # Show human-readable user info for lookups
+        fields = []
+        display_keys = ["user_id", "space_id", "tier", "internal", "country_code", "registration_ts"]
+        for k in display_keys:
+            v = after_state.get(k)
+            if v is not None:
+                fields.append({"type": "mrkdwn", "text": f"*{k}:*\n`{v}`"})
+        blocks: list[dict[str, Any]] = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"🔍 User Info: {target}", "emoji": True},
+            },
+            {"type": "divider"},
+        ]
+        if fields:
+            # Slack allows max 10 fields per section block
+            for i in range(0, len(fields), 10):
+                blocks.append({"type": "section", "fields": fields[i:i+10]})
+        # Quotas as a separate context line if present
+        quotas = after_state.get("quotas")
+        if quotas:
+            blocks.append({
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": f"📊 Quotas: `{json.dumps(quotas)}`"}],
+            })
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"🔎 Audit: `{audit_id}` _(read logged)_"}],
+        })
+        return blocks
+
     return [
         {
             "type": "section",

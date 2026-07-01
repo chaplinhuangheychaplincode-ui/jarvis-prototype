@@ -152,31 +152,8 @@ def handle_mention(event: dict[str, Any]) -> None:
         post_message(channel, question, thread_ts=ts, blocks=blocks)
         return
 
-    # Lookup — no confirmation needed
-    if intent.get("action") == "lookup":
-        result = heygen.lookup_user(intent.get("target_email", ""))
-        audit_id = write_audit(
-            actor_slack_id=user_id,
-            action="lookup",
-            result="success",
-            intent=intent,
-            before_state=result,
-            channel_id=channel,
-            message_ts=ts,
-        )
-        lines = [f"*User info for `{intent['target_email']}`:*"]
-        for k, v in result.items():
-            if v is not None:
-                lines.append(f"• *{k}:* `{v}`")
-        lines.append(f"\n_Audit: `{audit_id}` (read logged)_")
-        post_message(channel, "\n".join(lines), thread_ts=ts)
-        # Separate audit trail message (searchable)
-        post_message(channel,
-            f":mag: *Audit trail* | `{audit_id}` | `lookup` | `{intent.get('target_email')}` | by <@{user_id}>",
-            thread_ts=ts)
-        return
-
-    # Write actions — dry-run + confirmation card
+    # ALL actions (including lookup) go through the dry-run card + ✅ confirmation flow
+    # so the user always sees what will happen before it executes.
     target_email = intent.get("target_email", "")
     before_state = heygen.get_user_state(target_email)
 
@@ -311,7 +288,10 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
     action = intent.get("action")
     email = intent.get("target_email", "")
 
-    if action == "quota_grant":
+    if action == "lookup":
+        return heygen.lookup_user(email)
+
+    elif action == "quota_grant":
         return heygen.execute_quota_grant(
             email=email,
             tier=intent.get("tier"),
