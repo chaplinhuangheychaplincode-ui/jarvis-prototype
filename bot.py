@@ -28,8 +28,7 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from slack_bolt import App
-from slack_bolt.adapter.socket_mode import SocketModeHandler
+from flask import Flask, request as flask_request, jsonify
 
 from intent_parser import parse_intent
 from pending_store import (
@@ -44,6 +43,8 @@ from slack_client import (
 )
 import heygen_cms_api as heygen
 
+BOT_HTTP_PORT = int(os.environ.get("JARVIS_BOT_PORT", "8088"))
+BOT_HTTP_SECRET = os.environ.get("JARVIS_BOT_SECRET", "jarvis-internal-secret")
 CONFIDENCE_THRESHOLD = 0.70
 BOT_USER_ID = "U0BDYHHJQTY"   # @HeyChaplinCode
 OWNER_SLACK_ID = "U0BBD6002R2"  # yichi.huang — authorized to confirm write ops
@@ -76,10 +77,8 @@ if not SLACK_APP_TOKEN:
     raise RuntimeError("SLACK_APP_TOKEN not found — Socket Mode requires an xapp-... token")
 
 # ---------------------------------------------------------------------------
-# Bolt app
+# (Bolt app removed — now using Flask HTTP server; gateway plugin forwards events)
 # ---------------------------------------------------------------------------
-
-app = App(token=SLACK_BOT_TOKEN)
 
 
 def is_authorized(user_id: str) -> bool:
@@ -507,36 +506,41 @@ def _run_bulk_grant(
     print(f"[BULK_DONE] batch={batch_id} ok={len(success)} fail={len(failed)} skip={len(skipped)}")
 
 # ---------------------------------------------------------------------------
-# Bolt event handlers
+# Flask HTTP server — receives forwarded events from the gateway plugin
 # ---------------------------------------------------------------------------
 
-@app.event("app_mention")
-def on_app_mention(event, say):
-    """Triggered when the bot is @mentioned in any channel it belongs to."""
+_flask_app = Flask(__name__)
+
+
+def _check_secret() -> bool:
+    return flask_request.headers.get("X-Jarvis-Secret") == BOT_HTTP_SECRET
+
+
+@_flask_app.route("/mention", methods=["POST"])
+def http_mention():
+    """Gateway plugin posts @mention events here."""
+    if not _check_secret():
+        return jsonify({"error": "unauthorized"}), 403
+    event = flask_request.json
     t = threading.Thread(target=_handle_mention_with_timeout, args=(event,), daemon=True)
     t.start()
+    return jsonify({"ok": True})
 
 
-@app.action("confirm_action")
-def on_confirm_action(ack, body):
-    """Block Kit ✅ Confirm button."""
-    ack()
+@_flask_app.route("/action", methods=["POST"])
+def http_action():
+    """Gateway plugin posts Block Kit button actions here."""
+    if not _check_secret():
+        return jsonify({"error": "unauthorized"}), 403
+    body = flask_request.json
     t = threading.Thread(target=handle_block_action, args=(body,), daemon=True)
     t.start()
+    return jsonify({"ok": True})
 
 
-@app.action("cancel_action")
-def on_cancel_action(ack, body):
-    """Block Kit ❌ Cancel button."""
-    ack()
-    t = threading.Thread(target=handle_block_action, args=(body,), daemon=True)
-    t.start()
-
-
-# Swallow unhandled message subtypes (edits, file uploads, etc.) to avoid Bolt warnings
-@app.event("message")
-def on_message(event):
-    pass
+@_flask_app.route("/health", methods=["GET"])
+def http_health():
+    return jsonify({"ok": True, "service": "jarvis-bot"})
 
 
 # ---------------------------------------------------------------------------
@@ -544,11 +548,11 @@ def on_message(event):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("🤖 Jarvis starting — Socket Mode (push events, multi-channel)")
+    print("🤖 Jarvis starting — HTTP mode (gateway plugin forwards events)")
     print(f"   Bot: {BOT_USER_ID} | Authorized confirmer: {OWNER_SLACK_ID}")
     print(f"   Confidence threshold: {CONFIDENCE_THRESHOLD:.0%}")
-    print(f"   Confirmation: Block Kit buttons (not emoji reactions)")
+    print(f"   Listening on 0.0.0.0:{BOT_HTTP_PORT}")
     print()
 
-    handler = SocketModeHandler(app, SLACK_APP_TOKEN)
-    handler.start()
+    _flask_app.run(host="0.0.0.0", port=BOT_HTTP_PORT, threaded=True)
+
