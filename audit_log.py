@@ -47,8 +47,8 @@ def _conn() -> sqlite3.Connection:
             ON jarvis_audit_log(slack_message_ts, action, target_email)
             WHERE slack_message_ts IS NOT NULL
         """)
-    except sqlite3.OperationalError:
-        pass  # index already exists — safe to ignore
+    except (sqlite3.OperationalError, sqlite3.IntegrityError):
+        pass  # index already exists or duplicate rows present — safe to ignore
     conn.commit()
     return conn
 
