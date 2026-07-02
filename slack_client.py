@@ -69,6 +69,93 @@ def get_user_info(user_id: str) -> dict[str, Any]:
     return resp.get("user", {})
 
 
+def build_bulk_confirmation_card(intent: dict[str, Any], pending_id: str) -> list[dict[str, Any]]:
+    """Build a confirmation card for bulk_grant operations."""
+    emails = intent.get("target_emails", [])
+    n = len(emails)
+    tier = intent.get("tier", "")
+    credits = intent.get("credits")
+    days = intent.get("duration_days")
+    product = intent.get("product", "generative_credit")
+    reason = intent.get("reason", "")
+    confidence = intent.get("confidence", 0)
+
+    # Build grant description
+    grant_parts = []
+    if tier:
+        grant_parts.append(f"*Tier:* {tier}")
+    if credits:
+        grant_parts.append(f"*Credits:* {credits:,} {product}")
+    if days:
+        grant_parts.append(f"*Duration:* {days}d")
+    grant_str = " · ".join(grant_parts) if grant_parts else "_no grant details_"
+
+    # Recipient preview (show first 5, then "+N more")
+    preview = ", ".join(f"`{e}`" for e in emails[:5])
+    if n > 5:
+        preview += f" … +{n - 5} more"
+
+    confidence_emoji = "🟢" if confidence >= 0.85 else "🟡" if confidence >= 0.6 else "🔴"
+    utterance = intent.get("raw_utterance", "")
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"🤖 Jarvis — Bulk Grant Preview ({n} users)", "emoji": True},
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Grant:* {grant_str}"},
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Recipients ({n}):*\n{preview}"},
+        },
+    ]
+    if reason:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Reason:* _{reason}_"},
+        })
+    blocks += [
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": (
+                f"{confidence_emoji} Confidence: *{confidence:.0%}* · "
+                f"ID: `{pending_id}` · _Expires in 15 min_"
+            )}],
+        },
+    ]
+    if utterance:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"💬 _{utterance}_"}],
+        })
+    blocks.append({"type": "divider"})
+    blocks.append({
+        "type": "actions",
+        "block_id": f"confirm_actions_{pending_id}",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": f"✅ Confirm ({n} users)", "emoji": True},
+                "style": "primary",
+                "value": pending_id,
+                "action_id": "confirm_action",
+            },
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "❌ Cancel", "emoji": True},
+                "style": "danger",
+                "value": pending_id,
+                "action_id": "cancel_action",
+            },
+        ],
+    })
+    return blocks
+
+
 def build_confirmation_card(intent: dict[str, Any], before_state: dict[str, Any],
                              pending_id: str) -> list[dict[str, Any]]:
     """Build a Block Kit confirmation card with interactive ✅/❌ buttons."""

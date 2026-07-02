@@ -36,10 +36,11 @@ from pending_store import (
     claim_pending, get_by_pending_id, mark_cancelled, mark_executed,
     reset_to_pending, write_pending,
 )
-from audit_log import write_audit, query_audit
+from audit_log import write_audit, query_audit, audit_has_batch_row
 from slack_client import (
     post_message, update_message, get_user_info,
     build_confirmation_card, build_clarifying_question_card, build_audit_ack_card,
+    build_bulk_confirmation_card,
 )
 import heygen_cms_api as heygen
 
@@ -197,6 +198,29 @@ def handle_mention(event: dict[str, Any]) -> None:
     target_email = intent.get("target_email", "")
     action = intent.get("action")
 
+    # ---- BULK GRANT path ----
+    if action == "bulk_grant":
+        import uuid
+        pending_id = f"jrv_p_{uuid.uuid4().hex[:8]}"
+        resp = post_message(
+            channel,
+            f"Bulk grant preview for {len(intent.get('target_emails', []))} users — confirm or cancel below",
+            thread_ts=ts,
+            blocks=build_bulk_confirmation_card(intent, pending_id),
+        )
+        card_ts = resp["ts"]
+        write_pending(
+            actor_slack_id=user_id,
+            intent=intent,
+            before_state={},
+            channel_id=channel,
+            thread_ts=ts,
+            message_ts=card_ts,
+            pending_id=pending_id,
+        )
+        print(f"[BULK_PENDING] {pending_id} stored for {len(intent.get('target_emails', []))} users")
+        return
+
     # Guard: validate user exists for ops that require it
     if action in ("lookup", "quota_grant"):
         before_state = heygen.get_user_state(target_email)
@@ -333,6 +357,16 @@ def handle_block_action(body: dict[str, Any]) -> None:
         # Execute — wrap in try/except so a crash releases the claim
         post_message(channel_id, "⚙️ Executing...", thread_ts=thread_ts)
         try:
+            # Bulk grant: run in background thread, ack immediately
+            if intent.get("action") == "bulk_grant":
+                t = threading.Thread(
+                    target=_run_bulk_grant,
+                    args=(intent, pending_id, user_id, channel_id, thread_ts, pending["message_ts"]),
+                    daemon=True,
+                )
+                t.start()
+                return  # ack already sent above; results come async
+
             after_state = _execute_intent(intent)
         except Exception as exec_err:
             print(f"[EXEC ERROR] {pending_id}: {exec_err}")
@@ -403,6 +437,74 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
     else:
         return {"action": action, "status": "not_implemented"}
 
+
+def _run_bulk_grant(
+    intent: dict[str, Any],
+    pending_id: str,
+    actor_slack_id: str,
+    channel_id: str,
+    thread_ts: str,
+    card_ts: str,
+) -> None:
+    """Execute bulk_grant in a background thread. Posts progress + summary when done."""
+    import uuid as _uuid
+    emails = intent.get("target_emails", [])
+    batch_id = f"jrv_b_{_uuid.uuid4().hex[:8]}"
+    success: list[str] = []
+    failed: list[tuple[str, str]] = []
+    skipped: list[str] = []
+
+    for email in emails:
+        # Idempotency: skip already-granted rows for this batch
+        if audit_has_batch_row(batch_id, email):
+            skipped.append(email)
+            continue
+        try:
+            after_state = heygen.execute_quota_grant(
+                email=email,
+                tier=intent.get("tier"),
+                credits=intent.get("credits"),
+                duration_days=intent.get("duration_days"),
+                product=intent.get("product", "credits"),
+            )
+            write_audit(
+                actor_slack_id=actor_slack_id,
+                action="bulk_grant",
+                result="success",
+                intent={**intent, "target_email": email},
+                after_state=after_state,
+                channel_id=channel_id,
+                message_ts=card_ts,
+                batch_id=batch_id,
+            )
+            success.append(email)
+        except Exception as e:
+            failed.append((email, str(e)))
+
+    # Mark pending as executed
+    mark_executed(pending_id)
+
+    # Update card
+    update_message(
+        channel_id, card_ts,
+        f"✅ Bulk grant complete — `{batch_id}`",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"✅ *Bulk grant done* · `{batch_id}` · by <@{actor_slack_id}>"}}],
+    )
+
+    # Summary in thread
+    lines = [f"✅ *Bulk grant complete* — Batch `{batch_id}`"]
+    lines.append(f"  ✓ *{len(success)}* succeeded")
+    if failed:
+        fail_detail = ", ".join(f"`{e}` ({err})" for e, err in failed[:5])
+        if len(failed) > 5:
+            fail_detail += f" … +{len(failed)-5} more"
+        lines.append(f"  ✗ *{len(failed)}* failed: {fail_detail}")
+    if skipped:
+        lines.append(f"  ↩ *{len(skipped)}* skipped (already granted)")
+    lines.append(f"  Audit rows written: *{len(success)}*")
+    post_message(channel_id, "\n".join(lines), thread_ts=thread_ts)
+    print(f"[BULK_DONE] batch={batch_id} ok={len(success)} fail={len(failed)} skip={len(skipped)}")
 
 # ---------------------------------------------------------------------------
 # Bolt event handlers

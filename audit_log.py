@@ -96,6 +96,17 @@ def write_audit(
     return audit_id
 
 
+def audit_has_batch_row(batch_id: str, target_email: str) -> bool:
+    """Return True if this batch_id + email combo already has an audit row (idempotency check)."""
+    conn = _conn()
+    row = conn.execute(
+        "SELECT 1 FROM jarvis_audit_log WHERE batch_id=? AND target_email=? AND result='success'",
+        (batch_id, target_email),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
 def query_audit(target_email: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
     conn = _conn()
     if target_email:

@@ -49,7 +49,12 @@ INTENT_TOOL = {
             },
             "target_email": {
                 "type": "string",
-                "description": "Target user email address",
+                "description": "Target user email address (single-user ops only)",
+            },
+            "target_emails": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of email addresses for bulk_grant (max 100). Extract ALL emails found in the utterance.",
             },
             "tier": {
                 "type": "string",
@@ -102,7 +107,9 @@ Legal combinations:
 - quota_grant: credits only valid with tier=creator|pro|business
 - API quota grants use product="api", no tier needed
 - Generative credits use product="generative_credit"
-- Bulk grants: if email list not inline, set needs_clarification asking for CSV
+- bulk_grant: use when there are multiple target emails OR explicit "bulk"/"batch"/"all these users" language.
+  Extract ALL emails from the utterance into target_emails (list). Max 100.
+  If the description says "these users" with no list inline, set needs_clarification=true asking for the list.
 
 Raw CLI mode: if utterance starts with "!raw ", set action="unknown" and needs_clarification=false
 (this bypasses the LLM path in production)."""
@@ -157,9 +164,32 @@ def _validate_intent(intent: dict[str, Any], utterance: str) -> dict[str, Any]:
             intent["clarifying_question"] = "What email address should I target?"
             intent["confidence"] = 0.3
 
-    if intent.get("action") == "ent_sub_grant" and not intent.get("ae_attribution"):
-        intent["needs_clarification"] = True
-        intent["clarifying_question"] = "Enterprise subs need AE attribution. Which AE should be credited?"
+    if intent.get("action") == "bulk_grant":
+        emails = intent.get("target_emails") or []
+        # Deduplicate and strip whitespace
+        emails = list(dict.fromkeys(e.strip().lower() for e in emails if "@" in e))
+        intent["target_emails"] = emails
+        if len(emails) == 0:
+            intent["needs_clarification"] = True
+            intent["clarifying_question"] = (
+                "Please paste the list of emails to bulk-grant "
+                "(one per line or comma-separated, max 100)."
+            )
+            intent["confidence"] = 0.3
+        elif len(emails) > 100:
+            intent["needs_clarification"] = True
+            intent["clarifying_question"] = (
+                f"That's {len(emails)} emails — max batch size is 100. "
+                "Please split into smaller batches."
+            )
+            intent["confidence"] = 0.3
+        elif not intent.get("tier") and not intent.get("credits"):
+            intent["needs_clarification"] = True
+            intent["clarifying_question"] = (
+                "What should I grant? Please specify tier and/or credit amount and duration. "
+                "Example: *creator tier, 500 credits, 90 days*."
+            )
+            intent["confidence"] = 0.4
 
     return intent
 
