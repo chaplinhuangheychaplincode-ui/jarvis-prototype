@@ -28,12 +28,14 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from flask import Flask, request as flask_request, jsonify
+from slack_bolt import App
+from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from intent_parser import parse_intent
 from pending_store import (
     claim_pending, get_by_pending_id, mark_cancelled, mark_executed,
-    reset_to_pending, write_pending,
+    reset_to_pending, write_pending, list_expired_pending, expire_by_id,
+    EXPIRY_MINUTES,
 )
 from audit_log import write_audit, query_audit, audit_has_batch_row
 from slack_client import (
@@ -46,7 +48,7 @@ import heygen_cms_api as heygen
 BOT_HTTP_PORT = int(os.environ.get("JARVIS_BOT_PORT", "8088"))
 BOT_HTTP_SECRET = os.environ.get("JARVIS_BOT_SECRET", "jarvis-internal-secret")
 CONFIDENCE_THRESHOLD = 0.70
-BOT_USER_ID = "U0BDYHHJQTY"   # @HeyChaplinCode
+BOT_USER_ID = "U0BERJGULPQ"   # @jarvisjustbot (new dedicated app)
 OWNER_SLACK_ID = "U0BBD6002R2"  # yichi.huang — authorized to confirm write ops
 REQUEST_TIMEOUT = 10  # seconds — hard cap per attempt
 REQUEST_MAX_RETRIES = 3  # total attempts before giving up
@@ -506,41 +508,75 @@ def _run_bulk_grant(
     print(f"[BULK_DONE] batch={batch_id} ok={len(success)} fail={len(failed)} skip={len(skipped)}")
 
 # ---------------------------------------------------------------------------
-# Flask HTTP server — receives forwarded events from the gateway plugin
+# Bolt app + Socket Mode
 # ---------------------------------------------------------------------------
 
-_flask_app = Flask(__name__)
+# ---------------------------------------------------------------------------
+# TTL Expiry Sweep — background thread, runs every 60s
+# ---------------------------------------------------------------------------
+
+EXPIRY_SWEEP_INTERVAL = 60  # seconds between sweeps
 
 
-def _check_secret() -> bool:
-    return flask_request.headers.get("X-Jarvis-Secret") == BOT_HTTP_SECRET
+def _expiry_sweep() -> None:
+    """Sweep for stale pending confirmations and notify users in Slack."""
+    while True:
+        try:
+            expired_rows = list_expired_pending()
+            for row in expired_rows:
+                pending_id = row["pending_id"]
+                claimed = expire_by_id(pending_id)
+                if not claimed:
+                    continue  # race: another thread beat us (e.g. button click)
+                channel_id = row["channel_id"]
+                thread_ts = row["thread_ts"]
+                intent = json.loads(row["intent_json"])
+                action = intent.get("action", "?")
+                email = intent.get("target_email", "?")
+                print(f"[EXPIRE] {pending_id} action={action} email={email}")
+                try:
+                    post_message(
+                        channel_id,
+                        f"⏰ *Request expired* — `{action}` for `{email}` "
+                        f"(pending_id `{pending_id}`) was not confirmed within "
+                        f"{EXPIRY_MINUTES} minutes.\n"
+                        f"Mention me again to start a new request.",
+                        thread_ts=thread_ts,
+                    )
+                except Exception as e:
+                    print(f"[EXPIRE] failed to post expiry notice for {pending_id}: {e}")
+        except Exception as e:
+            print(f"[EXPIRE] sweep error: {e}")
+        threading.Event().wait(EXPIRY_SWEEP_INTERVAL)
 
 
-@_flask_app.route("/mention", methods=["POST"])
-def http_mention():
-    """Gateway plugin posts @mention events here."""
-    if not _check_secret():
-        return jsonify({"error": "unauthorized"}), 403
-    event = flask_request.json
+
+app = App(token=SLACK_BOT_TOKEN)
+
+
+@app.event("app_mention")
+def on_app_mention(event, say):
     t = threading.Thread(target=_handle_mention_with_timeout, args=(event,), daemon=True)
     t.start()
-    return jsonify({"ok": True})
 
 
-@_flask_app.route("/action", methods=["POST"])
-def http_action():
-    """Gateway plugin posts Block Kit button actions here."""
-    if not _check_secret():
-        return jsonify({"error": "unauthorized"}), 403
-    body = flask_request.json
+@app.action("confirm_action")
+def on_confirm_action(ack, body):
+    ack()
     t = threading.Thread(target=handle_block_action, args=(body,), daemon=True)
     t.start()
-    return jsonify({"ok": True})
 
 
-@_flask_app.route("/health", methods=["GET"])
-def http_health():
-    return jsonify({"ok": True, "service": "jarvis-bot"})
+@app.action("cancel_action")
+def on_cancel_action(ack, body):
+    ack()
+    t = threading.Thread(target=handle_block_action, args=(body,), daemon=True)
+    t.start()
+
+
+@app.event("message")
+def on_message(event):
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -548,11 +584,16 @@ def http_health():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("🤖 Jarvis starting — HTTP mode (gateway plugin forwards events)")
+    print("🤖 Jarvis starting — Socket Mode (dedicated app)")
     print(f"   Bot: {BOT_USER_ID} | Authorized confirmer: {OWNER_SLACK_ID}")
     print(f"   Confidence threshold: {CONFIDENCE_THRESHOLD:.0%}")
-    print(f"   Listening on 0.0.0.0:{BOT_HTTP_PORT}")
     print()
 
-    _flask_app.run(host="0.0.0.0", port=BOT_HTTP_PORT, threaded=True)
+    # Start TTL expiry sweep in background
+    sweep_t = threading.Thread(target=_expiry_sweep, daemon=True, name="expiry-sweep")
+    sweep_t.start()
+    print(f"   Expiry sweep: every {EXPIRY_SWEEP_INTERVAL}s (TTL={EXPIRY_MINUTES}min)")
+
+    handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+    handler.start()
 

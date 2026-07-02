@@ -223,6 +223,31 @@ def list_pending() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def list_expired_pending() -> list[dict[str, Any]]:
+    """Return all pending rows that have passed their expires_at but aren't yet marked expired."""
+    conn = _conn()
+    now = datetime.now(timezone.utc).isoformat()
+    rows = conn.execute(
+        "SELECT * FROM pending_confirmations WHERE status='pending' AND expires_at <= ?",
+        (now,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def expire_by_id(pending_id: str) -> bool:
+    """Mark a single pending row as expired. Returns True if the row was actually pending."""
+    conn = _conn()
+    cursor = conn.execute(
+        "UPDATE pending_confirmations SET status='expired' WHERE pending_id=? AND status='pending'",
+        (pending_id,)
+    )
+    changed = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
 if __name__ == "__main__":
     # smoke test
     pid = write_pending(

@@ -29,6 +29,15 @@ jarvis_tok = subprocess.run(
 if jarvis_tok and not jarvis_tok.startswith('no such secret'):
     env['SLACK_BOT_TOKEN'] = jarvis_tok
     print(f"Using dedicated Jarvis bot token: {jarvis_tok[:16]}...")
+
+# Use the dedicated Jarvis app-level token for Socket Mode
+jarvis_app_tok = subprocess.run(
+    [sys.executable, '/opt/genesis/manage-secrets.py', 'get', 'SLACK_APP_TOKEN_JARVIS'],
+    capture_output=True, text=True
+).stdout.strip()
+if jarvis_app_tok and not jarvis_app_tok.startswith('no such secret'):
+    env['SLACK_APP_TOKEN'] = jarvis_app_tok
+    print(f"Using dedicated Jarvis app token: {jarvis_app_tok[:16]}...")
 # Ensure flask is importable (installed to user site)
 user_site = subprocess.run(
     [sys.executable, '-c', 'import site; print(site.getusersitepackages())'],
