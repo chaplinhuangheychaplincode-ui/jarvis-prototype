@@ -312,26 +312,37 @@ def handle_block_action(body: dict[str, Any]) -> None:
             )
             return
 
-        # TOCTOU: re-snapshot before executing
-        current_state = heygen.get_user_state(target_email) if target_email else {}
-        if current_state and current_state != before_state:
-            reset_to_pending(pending_id, json.dumps(current_state))
-            # Rebuild card with fresh state
-            update_message(
-                channel_id, pending["message_ts"],
-                f"⚠️ State changed — please confirm again",
-                blocks=build_confirmation_card(intent, current_state, pending_id),
-            )
+        # TOCTOU: re-snapshot before executing (skip for create_account — no meaningful before_state)
+        if intent.get("action") != "create_account":
+            current_state = heygen.get_user_state(target_email) if target_email else {}
+            if current_state and current_state != before_state:
+                reset_to_pending(pending_id, json.dumps(current_state))
+                # Rebuild card with fresh state
+                update_message(
+                    channel_id, pending["message_ts"],
+                    f"⚠️ State changed — please confirm again",
+                    blocks=build_confirmation_card(intent, current_state, pending_id),
+                )
+                post_message(
+                    channel_id,
+                    "⚠️ State changed since dry-run. Updated preview above — click ✅ Confirm again.",
+                    thread_ts=thread_ts,
+                )
+                return
+
+        # Execute — wrap in try/except so a crash releases the claim
+        post_message(channel_id, "⚙️ Executing...", thread_ts=thread_ts)
+        try:
+            after_state = _execute_intent(intent)
+        except Exception as exec_err:
+            print(f"[EXEC ERROR] {pending_id}: {exec_err}")
+            reset_to_pending(pending_id, json.dumps(before_state))
             post_message(
                 channel_id,
-                "⚠️ State changed since dry-run. Updated preview above — click ✅ Confirm again.",
+                f"❌ Execution failed: `{exec_err}`. Action reset — click ✅ to retry.",
                 thread_ts=thread_ts,
             )
             return
-
-        # Execute
-        post_message(channel_id, "⚙️ Executing...", thread_ts=thread_ts)
-        after_state = _execute_intent(intent)
 
         # Write audit BEFORE ack (SOC2 ordering)
         audit_id = write_audit(
