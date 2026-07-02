@@ -21,7 +21,7 @@ env = os.environ.copy()
 env['ANTHROPIC_API_KEY'] = key
 env['SLACK_HOME_CHANNEL'] = 'C0BDT0WDDV5'
 # Log channel for audit trail posting — set to empty string to disable
-env.setdefault('JARVIS_LOG_CHANNEL', '')  # override by setting env var before launch
+env['JARVIS_LOG_CHANNEL'] = 'C0BEW7TE50S'  # #jarvis-log-dev
 
 # Use the dedicated Jarvis bot token (separate from the gateway token)
 jarvis_tok = subprocess.run(
