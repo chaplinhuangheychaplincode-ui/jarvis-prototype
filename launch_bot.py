@@ -20,6 +20,15 @@ print(f"Launching bot with key: {key[:12]}...")
 env = os.environ.copy()
 env['ANTHROPIC_API_KEY'] = key
 env['SLACK_HOME_CHANNEL'] = 'C0BDT0WDDV5'
+
+# Use the dedicated Jarvis bot token (separate from the gateway token)
+jarvis_tok = subprocess.run(
+    [sys.executable, '/opt/genesis/manage-secrets.py', 'get', 'SLACK_BOT_TOKEN_JARVIS'],
+    capture_output=True, text=True
+).stdout.strip()
+if jarvis_tok and not jarvis_tok.startswith('no such secret'):
+    env['SLACK_BOT_TOKEN'] = jarvis_tok
+    print(f"Using dedicated Jarvis bot token: {jarvis_tok[:16]}...")
 # Ensure flask is importable (installed to user site)
 user_site = subprocess.run(
     [sys.executable, '-c', 'import site; print(site.getusersitepackages())'],
