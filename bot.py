@@ -53,6 +53,46 @@ OWNER_SLACK_ID = "U0BBD6002R2"  # yichi.huang — authorized to confirm write op
 REQUEST_TIMEOUT = 10  # seconds — hard cap per attempt
 REQUEST_MAX_RETRIES = 3  # total attempts before giving up
 
+# Log channel: set JARVIS_LOG_CHANNEL env var or update this ID to enable audit log posting.
+# Leave empty to disable log channel posting.
+JARVIS_LOG_CHANNEL = os.environ.get("JARVIS_LOG_CHANNEL", "")
+
+# ---------------------------------------------------------------------------
+# Log channel helper
+# ---------------------------------------------------------------------------
+
+_ACTION_EMOJI = {
+    "lookup":         "🔍",
+    "quota_grant":    "💳",
+    "bulk_grant":     "📦",
+    "create_account": "🆕",
+    "ent_sub_grant":  "🏢",
+}
+
+
+def _post_to_log_channel(
+    audit_id: str,
+    action: str,
+    target_email: str,
+    actor_slack_id: str,
+    result: str = "success",
+    batch_id: str | None = None,
+) -> None:
+    """Post a one-line audit entry to JARVIS_LOG_CHANNEL (if configured)."""
+    if not JARVIS_LOG_CHANNEL:
+        return
+    emoji = _ACTION_EMOJI.get(action, "⚙️")
+    result_tag = "✅" if result == "success" else "❌"
+    batch_suffix = f" · batch `{batch_id}`" if batch_id else ""
+    text = (
+        f"{result_tag} {emoji} *{action}* | `{target_email}` "
+        f"| by <@{actor_slack_id}> | audit `{audit_id}`{batch_suffix}"
+    )
+    try:
+        post_message(JARVIS_LOG_CHANNEL, text)
+    except Exception as e:
+        print(f"[LOG_CHANNEL] failed to post audit line: {e}")
+
 # ---------------------------------------------------------------------------
 # Token helpers
 # ---------------------------------------------------------------------------
@@ -412,6 +452,8 @@ def handle_block_action(body: dict[str, Any]) -> None:
             f":white_check_mark: *Audit trail* | `{audit_id}` | `{intent.get('action')}` | `{target_email}` | by <@{user_id}>",
             thread_ts=thread_ts,
         )
+        # Log channel — silent if not configured
+        _post_to_log_channel(audit_id, intent.get("action", "unknown"), target_email, user_id)
         print(f"[EXECUTED] audit_id={audit_id}")
 
 
@@ -505,6 +547,16 @@ def _run_bulk_grant(
         lines.append(f"  ↩ *{len(skipped)}* skipped (already granted)")
     lines.append(f"  Audit rows written: *{len(success)}*")
     post_message(channel_id, "\n".join(lines), thread_ts=thread_ts)
+    # Log channel — one summary line for the whole batch
+    if success:
+        first_audit_id = f"jrv_a_{batch_id}"  # batch reference
+        _post_to_log_channel(
+            audit_id=first_audit_id,
+            action="bulk_grant",
+            target_email=f"{len(success)} users",
+            actor_slack_id=actor_slack_id,
+            batch_id=batch_id,
+        )
     print(f"[BULK_DONE] batch={batch_id} ok={len(success)} fail={len(failed)} skip={len(skipped)}")
 
 # ---------------------------------------------------------------------------
