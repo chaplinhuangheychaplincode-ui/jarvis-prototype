@@ -1,5 +1,7 @@
 """
-Jarvis Pending Store — SQLite-backed (prototype; production uses MySQL).
+Jarvis Pending Store — SQLite-backed.
+# TODO: deprecate SQLite → MySQL when bot goes to production (mutable state
+#       is a poor fit for ClickHouse; audit_log.py already migrated to CH).
 
 Persists pending confirmations across restarts. Each row is one pending action
 waiting for a ✅ button click from an authorized user.
