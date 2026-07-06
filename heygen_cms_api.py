@@ -57,7 +57,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-CMS_BASE = "https://cms-api.heygendev.com"
+CMS_BASE = "https://cms-api-dev.heygendev.com"
 
 # ---------------------------------------------------------------------------
 # Auth — cached to avoid spawning a subprocess on every call
