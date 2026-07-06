@@ -329,6 +329,8 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
             fields.append({"type": "mrkdwn", "text": f"*Email:*\n`{after['email']}`"})
         if after.get("space_id"):
             fields.append({"type": "mrkdwn", "text": f"*Space ID:*\n`{after['space_id']}`"})
+        if after.get("password"):
+            fields.append({"type": "mrkdwn", "text": f"*Password:*\n`{after['password']}`"})
         fields.append({"type": "mrkdwn", "text": f"*Created:*\n`{after.get('created', False)}`"})
         if after.get("tier"):
             fields.append({"type": "mrkdwn", "text": f"*Tier:*\n`{after['tier']}`"})

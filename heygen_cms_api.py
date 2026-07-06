@@ -316,6 +316,7 @@ def execute_create_account(email: str, tier: str | None = None, duration_days: i
     result: dict[str, Any] = {
         "email": account_data.get("email", email),
         "space_id": account_data.get("space_id"),
+        "password": account_data.get("password"),
         "created": created,
         "tier": tier,
         "subscription_days_remaining": duration_days,
