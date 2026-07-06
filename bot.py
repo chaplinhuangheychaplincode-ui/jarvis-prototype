@@ -510,6 +510,13 @@ def _run_bulk_grant(
                 duration_days=intent.get("duration_days"),
                 product=intent.get("product", "credits"),
             )
+            # execute_quota_grant returns {"error": ...} on API failure instead of raising
+            if after_state.get("error") or after_state.get("granted") is False:
+                err_msg = after_state.get("error", {})
+                if isinstance(err_msg, dict):
+                    err_msg = err_msg.get("message", str(err_msg))
+                failed.append((email, str(err_msg)))
+                continue
             write_audit(
                 actor_slack_id=actor_slack_id,
                 action="bulk_grant",
