@@ -472,7 +472,7 @@ def _format_request_body(intent: dict[str, Any]) -> str:
             return f"POST /v1/internal/movio/gift_subscription.add\n{json.dumps(body, indent=2)}"
         else:
             body = {"email": email, "feature": product,
-                    "total": credits, "expired_days": days}
+                    "quota": credits, "expired_days": days}
             return f"POST /v1/internal/movio/gift_quota.add\n{json.dumps(body, indent=2)}"
 
     elif action == "revoke_grant":
@@ -508,7 +508,7 @@ def _format_request_body(intent: dict[str, Any]) -> str:
                       "expired_days": days, "quotas": {product: credits} if credits else {}, "trial": True}
             return f"POST /v1/internal/movio/gift_subscription.add × {n}\n{json.dumps(sample, indent=2)}"
         sample = {"email": "<each of %d>" % n, "feature": product,
-                  "total": credits, "expired_days": days}
+                  "quota": credits, "expired_days": days}
         return f"POST /v1/internal/movio/gift_quota.add × {n}\n{json.dumps(sample, indent=2)}"
 
     elif action == "reduce_grant":

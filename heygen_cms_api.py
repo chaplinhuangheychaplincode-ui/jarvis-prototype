@@ -9,7 +9,7 @@ Confirmed endpoints (all POST, auth via x-api-key header):
 
   WRITE — quota (credits only, no tier change):
     /v1/internal/movio/gift_quota.add
-        body: {"email": str, "feature": str, "total": int, "expired_days": int, "note"?: str}
+        body: {"email": str, "feature": str, "quota": int, "expired_days": int, "note"?: str}
         → returns {quota_id, total, remaining, expires, message}
         features: "generative_credit" | "plan_credit" | "api" | "seat" |
                   "regular" | "unlimited_regular" | "video_translate" |
@@ -291,7 +291,7 @@ def _execute_credit_top_up(
     resp = _post("/v1/internal/movio/gift_quota.add", {
         "email": email,
         "feature": feature,
-        "total": credits,
+        "quota": credits,
         "expired_days": duration_days,
         "note": f"jarvis credit top-up tier_note={tier_note}",
     })
