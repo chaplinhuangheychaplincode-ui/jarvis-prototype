@@ -332,11 +332,17 @@ def execute_quota_expire(quota_id: str) -> dict[str, Any]:
     }
 
 
-def execute_quota_deduct(quota_id: str, amount: int) -> dict[str, Any]:
-    """Deduct (reduce) a specific quota grant by amount."""
-    resp = _post("/v1/internal/movio/gift_quota.deduct", {"quota_id": quota_id, "amount": amount})
+def execute_quota_deduct(email: str, product: str, amount: int) -> dict[str, Any]:
+    """Deduct (reduce) credits from a user by email+feature — no quota_id needed."""
+    feature = _normalize_feature(product)
+    resp = _post("/v1/internal/movio/gift_quota.deduct", {
+        "email": email,
+        "feature": feature,
+        "amount": amount,
+    })
     return {
-        "quota_id": quota_id,
+        "email": email,
+        "feature": feature,
         "amount_deducted": amount,
         "deducted": resp.get("code") == 100,
         "response": resp,

@@ -410,7 +410,8 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
         if after.get("tier"):
             fields.append({"type": "mrkdwn", "text": f"*Tier:*\n`{after['tier']}`"})
     elif action == "reduce_grant":
-        fields.append({"type": "mrkdwn", "text": f"*Quota ID:*\n`{after.get('quota_id', '?')}`"})
+        feature = after.get("feature", "?")
+        fields.append({"type": "mrkdwn", "text": f"*Credit type:*\n`{feature}`"})
         fields.append({"type": "mrkdwn", "text": f"*Amount deducted:*\n`{after.get('amount_deducted', '?'):,}`"})
         fields.append({"type": "mrkdwn", "text": f"*Success:*\n`{after.get('deducted', False)}`"})
     elif action == "revoke_grant":
@@ -504,9 +505,9 @@ def _format_request_body(intent: dict[str, Any]) -> str:
         return f"POST /v1/internal/movio/gift_quota.add × {n}\n{json.dumps(sample, indent=2)}"
 
     elif action == "reduce_grant":
-        quota_id = intent.get("quota_id", "?")
+        product = intent.get("product", "generative_credit")
         credits = intent.get("credits", "?")
-        body = {"quota_id": quota_id, "amount": credits}
+        body = {"email": email, "feature": product, "amount": credits}
         return f"POST /v1/internal/movio/gift_quota.deduct\n{json.dumps(body, indent=2)}"
 
     return ""
@@ -546,9 +547,10 @@ def _format_action_summary(intent: dict[str, Any], before: dict[str, Any]) -> st
         return f"*Revoke Grant* for `{target}` · type: *{revoke_type}*{detail}"
 
     elif action == "reduce_grant":
-        quota_id = intent.get("quota_id", "?")
+        product = intent.get("product", "generative_credit")
         credits = intent.get("credits", "?")
-        return f"*Reduce Grant* for `{target}` · deduct *{credits:,}* from quota `{quota_id}`" if isinstance(credits, int) else f"*Reduce Grant* for `{target}` · deduct *{credits}* from quota `{quota_id}`"
+        amt = f"{credits:,}" if isinstance(credits, int) else str(credits)
+        return f"*Reduce Grant* for `{target}` · deduct *{amt}* `{product}`"
 
     elif action == "ent_sub_grant":
         ae = intent.get("ae_attribution", "?")

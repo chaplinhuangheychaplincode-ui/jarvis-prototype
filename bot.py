@@ -651,14 +651,11 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
             results["error"] = "quota_id required for quota revoke"
         return results
     elif action == "reduce_grant":
-        quota_id = intent.get("quota_id")
         credits = intent.get("credits")
-        if not quota_id:
-            return {"email": email, "action": "reduce_grant", "error": "quota_id required"}
+        product = intent.get("product", "generative_credit")
         if not credits:
             return {"email": email, "action": "reduce_grant", "error": "credits (amount to deduct) required"}
-        result = heygen.execute_quota_deduct(quota_id=quota_id, amount=credits)
-        result["email"] = email
+        result = heygen.execute_quota_deduct(email=email, product=product, amount=credits)
         return result
     else:
         return {"action": action, "status": "not_implemented"}

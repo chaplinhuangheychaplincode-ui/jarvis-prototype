@@ -162,9 +162,9 @@ Revoke: if the user wants to cancel, undo, revoke, or remove a grant set action=
 - If no quota_id given and they say "cancel everything" or "revoke all", set revoke_type="both".
 - target_email is always required for revoke_grant.
 
-Reduce grant: if the user wants to reduce, decrease, lower, or subtract a specific number of credits from an existing grant, set action="reduce_grant".
-- Always requires quota_id (which specific grant to reduce) and credits (how many to deduct).
-- If quota_id is missing, set needs_clarification=true asking for the quota_id.
+Reduce grant: if the user wants to reduce, decrease, lower, or subtract a specific number of credits from a user's balance, set action="reduce_grant".
+- Requires target_email, credits (how many to deduct), and product (which credit type — default generative_credit).
+- No quota_id needed.
 - If credits (amount to deduct) is missing, set needs_clarification=true asking for the amount.
 - target_email is always required."""
 
@@ -266,20 +266,13 @@ def _validate_intent(intent: dict[str, Any], utterance: str) -> dict[str, Any]:
             intent["confidence"] = 0.4
 
     if intent.get("action") == "reduce_grant":
-        if not intent.get("quota_id") and not intent.get("needs_clarification"):
+        if not intent.get("credits") and not intent.get("needs_clarification"):
             intent["needs_clarification"] = True
-            intent["clarifying_question"] = (
-                "Which quota grant should I reduce? Please provide the `quota_id` "
-                "(visible in the audit ack card when the grant was made)."
-            )
-            intent["confidence"] = 0.3
-        elif not intent.get("credits") and not intent.get("needs_clarification"):
-            intent["needs_clarification"] = True
-            intent["clarifying_question"] = "How many credits should I deduct from that grant?"
+            intent["clarifying_question"] = "How many credits should I deduct?"
             intent["confidence"] = 0.3
         elif not intent.get("target_email") and not intent.get("needs_clarification"):
             intent["needs_clarification"] = True
-            intent["clarifying_question"] = "What email address is this grant for?"
+            intent["clarifying_question"] = "What email address should I deduct from?"
             intent["confidence"] = 0.3
 
     return intent
