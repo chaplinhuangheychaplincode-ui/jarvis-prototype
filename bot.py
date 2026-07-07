@@ -455,7 +455,7 @@ def handle_mention(event: dict[str, Any]) -> None:
             post_message(channel, "\n".join(lines), thread_ts=thread_ts)
         return
 
-    # Ensure conversation exists for this thread
+    # Ensure conversation exists for this thread — or reset if previous op is DONE
     if not conv_is_active(thread_ts):
         upsert_conversation(thread_ts, channel, [], state="GATHERING")
 
@@ -533,6 +533,7 @@ def handle_block_action(body: dict[str, Any]) -> None:
     # ❌ Cancel — anyone who sees the card can cancel (intentional)
     if action_id == "cancel_action":
         mark_cancelled(pending_id)
+        conv_set_state(thread_ts, "DONE")  # reset so next @mention starts fresh
         update_message(channel_id, pending["message_ts"],
                        f"~~Action cancelled~~ `{pending_id}`",
                        blocks=[{"type": "section", "text": {"type": "mrkdwn",
@@ -641,6 +642,9 @@ def handle_block_action(body: dict[str, Any]) -> None:
             print(f"[audit_log] WARN: write_audit failed (non-fatal): {audit_exc}", flush=True)
             audit_id = f"jrv_a_err_{__import__('uuid').uuid4().hex[:8]}"
         mark_executed(pending_id)
+        # Transition conversation to DONE so the next @mention in this thread
+        # starts a clean context (no stale history poisoning the intent parse)
+        conv_set_state(thread_ts, "DONE")
 
         # Update card to show completed state with elapsed time
         update_message(channel_id, pending["message_ts"],
