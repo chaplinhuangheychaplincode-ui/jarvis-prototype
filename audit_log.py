@@ -55,6 +55,12 @@ def _get_client() -> Any:
     return _CH_CLIENT
 
 
+def _reset_client() -> None:
+    """Reset cached client so next call creates a fresh connection."""
+    global _CH_CLIENT
+    _CH_CLIENT = None
+
+
 def _ch_insert(row: list) -> None:
     """Insert one row with exponential backoff. Raises on final failure."""
     global _CH_CLIENT
@@ -129,13 +135,19 @@ def write_audit(
 
 
 def audit_has_batch_row(batch_id: str, target_email: str) -> bool:
-    """Return True if this batch_id + email already has a success row (idempotency)."""
-    client = _get_client()
-    result = client.query(
-        "SELECT count() FROM jarvis_audit_log WHERE batch_id=%(batch_id)s AND target_email=%(email)s AND result='success'",
-        parameters={"batch_id": batch_id, "email": target_email},
-    )
-    return result.first_row[0] > 0
+    """Return True if this batch_id + email already has a success row (idempotency).
+    Falls back to False on CH unavailability — safe, just skips idempotency check."""
+    try:
+        client = _get_client()
+        result = client.query(
+            "SELECT count() FROM jarvis_audit_log WHERE batch_id=%(batch_id)s AND target_email=%(email)s AND result='success'",
+            parameters={"batch_id": batch_id, "email": target_email},
+        )
+        return result.first_row[0] > 0
+    except Exception as exc:
+        _reset_client()
+        print(f"[audit_log] audit_has_batch_row failed (CH unavailable), skipping idempotency check: {exc}", flush=True)
+        return False
 
 
 def query_audit(target_email: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
