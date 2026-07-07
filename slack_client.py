@@ -464,15 +464,28 @@ def _format_request_body(intent: dict[str, Any]) -> str:
         credits = intent.get("credits")
         days = intent.get("duration_days", 30)
         product = _normalize_product_client(intent.get("product"))
+        quota_type = intent.get("quota_type", None)
         has_tier = tier and tier.lower() in _VALID_TIERS_CLIENT
         if has_tier:
             quotas = {product: credits} if credits else {}
-            body = {"email": email, "tier": tier.lower(), "day": days,
-                    "quotas": quotas, "trial": True}
+            # All fields per AddGiftSubscriptionRequest (defaults shown explicitly)
+            body = {
+                "email": email,           # required
+                "tier": tier.lower(),     # required
+                "day": days,              # default=30
+                "quotas": quotas,         # default={}
+                "trial": True,            # default=True
+            }
             return f"POST /v1/internal/movio/gift_subscription.add\n{json.dumps(body, indent=2)}"
         else:
-            body = {"email": email, "feature": product,
-                    "quota": credits, "expire_days": days}
+            # All fields per AddGiftQuotaRequest (defaults shown explicitly)
+            body = {
+                "email": email,           # required
+                "feature": product,       # required, QuotaFeature enum
+                "quota": credits,         # required, ge=1 le=100000
+                "expire_days": days,      # default=30, ge=1 le=1825
+                "quota_type": quota_type, # null=expires on date; "withsubscrition"=permanent
+            }
             return f"POST /v1/internal/movio/gift_quota.add\n{json.dumps(body, indent=2)}"
 
     elif action == "revoke_grant":
@@ -487,11 +500,17 @@ def _format_request_body(intent: dict[str, Any]) -> str:
     elif action == "create_account":
         body: dict[str, Any] = {"email": email}
         tier = intent.get("tier")
-        days = intent.get("duration_days")
+        days = intent.get("duration_days", 30)
         lines = [f"POST /v1/internal/create_account\n{json.dumps(body, indent=2)}"]
         if tier and tier.lower() in _VALID_TIERS_CLIENT:
-            sub_body = {"email": email, "tier": tier.lower(),
-                        "expired_days": days, "quotas": {}, "trial": True}
+            # All fields per AddGiftSubscriptionRequest
+            sub_body = {
+                "email": email,
+                "tier": tier.lower(),     # required
+                "day": days,              # default=30 (was: wrong field "expired_days")
+                "quotas": {},             # default={}
+                "trial": True,           # default=True
+            }
             lines.append(f"\nPOST /v1/internal/movio/gift_subscription.add\n{json.dumps(sub_body, indent=2)}")
         return "\n".join(lines)
 
@@ -502,19 +521,35 @@ def _format_request_body(intent: dict[str, Any]) -> str:
         credits = intent.get("credits")
         days = intent.get("duration_days", 30)
         product = _normalize_product_client(intent.get("product"))
+        quota_type = intent.get("quota_type", None)
         has_tier = tier and tier.lower() in _VALID_TIERS_CLIENT
         if has_tier:
-            sample = {"email": "<each of %d>" % n, "tier": tier.lower(),
-                      "day": days, "quotas": {product: credits} if credits else {}, "trial": True}
+            sample = {
+                "email": "<each of %d>" % n,
+                "tier": tier.lower(),
+                "day": days,
+                "quotas": {product: credits} if credits else {},
+                "trial": True,
+            }
             return f"POST /v1/internal/movio/gift_subscription.add × {n}\n{json.dumps(sample, indent=2)}"
-        sample = {"email": "<each of %d>" % n, "feature": product,
-                  "quota": credits, "expire_days": days}
+        sample = {
+            "email": "<each of %d>" % n,
+            "feature": product,
+            "quota": credits,
+            "expire_days": days,
+            "quota_type": quota_type,
+        }
         return f"POST /v1/internal/movio/gift_quota.add × {n}\n{json.dumps(sample, indent=2)}"
 
     elif action == "reduce_grant":
         product = intent.get("product", "generative_credit")
         credits = intent.get("credits", "?")
-        body = {"email": email, "feature": product, "amount": credits}
+        # All fields per DeductGiftQuotaRequest
+        body = {
+            "email": email,       # required
+            "feature": product,   # required, QuotaFeature enum
+            "quota": credits,     # required (was: wrong field "amount")
+        }
         return f"POST /v1/internal/movio/gift_quota.deduct\n{json.dumps(body, indent=2)}"
 
     return ""
