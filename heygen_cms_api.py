@@ -93,6 +93,7 @@ def _get_api_key() -> str:
 def _post(path: str, data: dict[str, Any]) -> dict[str, Any]:
     key = _get_api_key()
     url = f"{CMS_BASE}{path}"
+    print(f"[CMS] POST {path} {json.dumps(data)}", flush=True)
     req = urllib.request.Request(
         url,
         data=json.dumps(data).encode(),

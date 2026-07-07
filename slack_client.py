@@ -178,10 +178,9 @@ def build_confirmation_card(intent: dict[str, Any], before_state: dict[str, Any]
         "text": {"type": "mrkdwn", "text": summary},
     })
 
-    # Diff fields — sanitized (no raw API blobs)
-    diff_fields = _build_diff_fields(intent, before_state)
-    if diff_fields:
-        blocks.append({"type": "section", "fields": diff_fields})
+    # Before state + request body blocks
+    diff_blocks = _build_diff_blocks(intent, before_state)
+    blocks.extend(diff_blocks)
 
     # Confidence + pending ID
     confidence_emoji = "🟢" if confidence >= 0.85 else "🟡" if confidence >= 0.6 else "🔴"
@@ -247,7 +246,8 @@ def build_clarifying_question_card(question: str) -> list[dict[str, Any]]:
 
 
 def build_audit_ack_card(audit_id: str, action: str, target: str,
-                          after_state: dict[str, Any]) -> list[dict[str, Any]]:
+                          after_state: dict[str, Any],
+                          before_state: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Build a post-execution summary card — no raw API blobs."""
     if action == "lookup":
         # Show human-readable user info for lookups (BUG-6: no raw JSON)
@@ -347,6 +347,37 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
                 "text": f"`{action}` applied to `{target}`",
             },
         })
+
+    # Before / After quota diff for grant and revoke operations
+    if action in ("quota_grant", "revoke_grant") and before_state:
+        diff_lines: list[str] = []
+        before_quotas = before_state.get("quotas", {}) or {}
+        after_quotas = after_state.get("quotas", {}) if after_state.get("quotas") else {}
+        # Build a unified set of all quota keys
+        all_keys = sorted(set(list(before_quotas.keys()) + list(after_quotas.keys())))
+
+        def _fmt_q(v: Any) -> str:
+            if isinstance(v, dict):
+                amt = v.get("amount", "?")
+                exp = v.get("expire_at") or v.get("expires", "")
+                return f"{amt}" + (f"  exp {str(exp)[:10]}" if exp else "")
+            return str(v)
+
+        for k in all_keys:
+            b = before_quotas.get(k)
+            a = after_quotas.get(k)
+            b_str = _fmt_q(b) if b is not None else "—"
+            a_str = _fmt_q(a) if a is not None else "—"
+            changed = b_str != a_str
+            marker = "* " if changed else "  "
+            diff_lines.append(f"{marker}{k}: {b_str} → {a_str}" if changed else f"{marker}{k}: {b_str}")
+
+        if diff_lines:
+            text = "Quotas (before → after):\n" + "\n".join(diff_lines)
+            if len(text) > 2900:
+                text = text[:2900] + "\n… (truncated)"
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"```{text}```"}})
+
     blocks.append({
         "type": "context",
         "elements": [{"type": "mrkdwn", "text": f"🔎 Audit: `{audit_id}`"}],
@@ -393,6 +424,85 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
     return fields
 
 
+_FEATURE_MAP_CLIENT = {
+    "credits": "generative_credit",
+    "generative_credit": "generative_credit",
+    "generative": "generative_credit",
+    "plan_credit": "plan_credit",
+    "plan": "plan_credit",
+    "api": "api",
+    "seat": "seat",
+    "video_translate": "video_translate",
+    "avatar_video": "avatar_video",
+    "personalized_video": "personalized_video",
+}
+_VALID_TIERS_CLIENT = {"creator", "pro", "business", "enterprise"}
+
+
+def _normalize_product_client(product: str | None) -> str:
+    return _FEATURE_MAP_CLIENT.get((product or "generative_credit").lower(), "generative_credit")
+
+
+def _format_request_body(intent: dict[str, Any]) -> str:
+    """Return the exact endpoint + JSON body that will be POSTed to CMS."""
+    action = intent.get("action")
+    email = intent.get("target_email", "?")
+
+    if action == "quota_grant":
+        tier = intent.get("tier", "")
+        credits = intent.get("credits")
+        days = intent.get("duration_days", 30)
+        product = _normalize_product_client(intent.get("product"))
+        has_tier = tier and tier.lower() in _VALID_TIERS_CLIENT
+        if has_tier:
+            quotas = {product: credits} if credits else {}
+            body = {"email": email, "tier": tier.lower(), "expired_days": days,
+                    "quotas": quotas, "trial": True}
+            return f"POST /v1/internal/movio/gift_subscription.add\n{json.dumps(body, indent=2)}"
+        else:
+            body = {"email": email, "feature": product,
+                    "total": credits, "expired_days": days}
+            return f"POST /v1/internal/movio/gift_quota.add\n{json.dumps(body, indent=2)}"
+
+    elif action == "revoke_grant":
+        revoke_type = intent.get("revoke_type", "subscription")
+        quota_id = intent.get("quota_id")
+        if revoke_type == "quota" and quota_id:
+            body = {"quota_id": quota_id}
+            return f"POST /v1/internal/movio/gift_quota.expire\n{json.dumps(body, indent=2)}"
+        body = {"email": email}
+        return f"POST /v1/internal/movio/gift_subscription.remove\n{json.dumps(body, indent=2)}"
+
+    elif action == "create_account":
+        body: dict[str, Any] = {"email": email}
+        tier = intent.get("tier")
+        days = intent.get("duration_days")
+        lines = [f"POST /v1/internal/create_account\n{json.dumps(body, indent=2)}"]
+        if tier and tier.lower() in _VALID_TIERS_CLIENT:
+            sub_body = {"email": email, "tier": tier.lower(),
+                        "expired_days": days, "quotas": {}, "trial": True}
+            lines.append(f"\nPOST /v1/internal/movio/gift_subscription.add\n{json.dumps(sub_body, indent=2)}")
+        return "\n".join(lines)
+
+    elif action == "bulk_grant":
+        emails = intent.get("target_emails", [])
+        n = len(emails)
+        tier = intent.get("tier", "")
+        credits = intent.get("credits")
+        days = intent.get("duration_days", 30)
+        product = _normalize_product_client(intent.get("product"))
+        has_tier = tier and tier.lower() in _VALID_TIERS_CLIENT
+        if has_tier:
+            sample = {"email": "<each of %d>" % n, "tier": tier.lower(),
+                      "expired_days": days, "quotas": {product: credits} if credits else {}, "trial": True}
+            return f"POST /v1/internal/movio/gift_subscription.add × {n}\n{json.dumps(sample, indent=2)}"
+        sample = {"email": "<each of %d>" % n, "feature": product,
+                  "total": credits, "expired_days": days}
+        return f"POST /v1/internal/movio/gift_quota.add × {n}\n{json.dumps(sample, indent=2)}"
+
+    return ""
+
+
 def _format_action_summary(intent: dict[str, Any], before: dict[str, Any]) -> str:
     action = intent.get("action")
     target = intent.get("target_email", "?")
@@ -437,40 +547,44 @@ def _format_action_summary(intent: dict[str, Any], before: dict[str, Any]) -> st
     return f"*{action}* for `{target}`"
 
 
-def _build_diff_fields(intent: dict[str, Any], before: dict[str, Any]) -> list[dict[str, Any]]:
-    """Sanitized diff — show only relevant fields, never raw API blobs."""
-    fields = []
+def _build_diff_blocks(intent: dict[str, Any], before: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return Block Kit blocks for full before state + API request preview."""
+    action = intent.get("action")
+    result_blocks: list[dict[str, Any]] = []
 
-    # Before: only show meaningful subset
-    if before:
-        before_parts = []
+    # ── Before state ─────────────────────────────────────────────────────────
+    if before and action not in ("create_account",) and before.get("tier") not in (None, "unknown"):
+        target_product = _normalize_product_client(intent.get("product"))
+        lines: list[str] = []
         for k in ("tier", "api_tier"):
-            if before.get(k):
-                before_parts.append(f"{k}: {before[k]}")
-        # Summarize quotas
+            v = before.get(k)
+            if v:
+                lines.append(f"  {k}: {v}")
         quotas = before.get("quotas", {})
         if quotas and isinstance(quotas, dict):
-            top = list(quotas.items())[:3]
-            quota_str = ", ".join(f"{k}={v}" for k, v in top)
-            before_parts.append(f"quotas: {quota_str}")
-        if before_parts:
-            fields.append({
-                "type": "mrkdwn",
-                "text": f"*Before:*\n```{chr(10).join(before_parts)}```",
+            for k, v in quotas.items():
+                amt = v.get("amount", "?") if isinstance(v, dict) else v
+                exp_raw = (v.get("expire_at") or v.get("expires", "")) if isinstance(v, dict) else ""
+                exp_str = f"  exp {str(exp_raw)[:10]}" if exp_raw else ""
+                marker = "→ " if k == target_product else "  "
+                lines.append(f"{marker}{k}: {amt}{exp_str}")
+        if lines:
+            text = "Before:\n" + "\n".join(lines)
+            # truncate to stay within Slack 3000 char limit
+            if len(text) > 2900:
+                text = text[:2900] + "\n  … (truncated)"
+            result_blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"```{text}```"},
             })
-
-    after_preview = {}
-    if intent.get("tier"):
-        after_preview["tier"] = intent["tier"]
-    if intent.get("credits"):
-        after_preview["credits"] = intent["credits"]
-    if intent.get("duration_days"):
-        after_preview["duration_days"] = intent["duration_days"]
-
-    if after_preview:
-        fields.append({
-            "type": "mrkdwn",
-            "text": f"*After (preview):*\n```{json.dumps(after_preview, indent=None)}```",
-        })
-
-    return fields
+    # ── API request body ──────────────────────────────────────────────────────
+    if action not in ("lookup",):
+        req = _format_request_body(intent)
+        if req:
+            if len(req) > 2900:
+                req = req[:2900] + "\n… (truncated)"
+            result_blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Request:*\n```{req}```"},
+            })
+    return result_blocks

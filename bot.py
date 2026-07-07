@@ -588,8 +588,15 @@ def handle_block_action(body: dict[str, Any]) -> None:
                        blocks=[{"type": "section", "text": {"type": "mrkdwn",
                                "text": f"✅ *Confirmed & executed* by <@{user_id}> · {elapsed}s · `{pending_id}`"}}])
 
-        # Ack card — BUG-6: sanitized, no raw blobs
-        blocks = build_audit_ack_card(audit_id, intent.get("action", ""), target_email, after_state)
+        # Ack card — pass before_state for before/after diff on write ops
+        # Re-fetch after-state quotas for accurate diff (quota_grant returns grant result, not full state)
+        ack_after = after_state
+        if intent.get("action") in ("quota_grant", "revoke_grant") and target_email:
+            try:
+                ack_after = heygen.get_user_state(target_email)
+            except Exception:
+                pass  # fall back to execute result
+        blocks = build_audit_ack_card(audit_id, intent.get("action", ""), target_email, ack_after, before_state=before_state)
         post_message(
             channel_id,
             f"✅ Done in {elapsed}s · Audit: `{audit_id}`",
