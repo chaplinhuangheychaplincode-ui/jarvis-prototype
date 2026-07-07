@@ -99,9 +99,16 @@ INTENT_TOOL = {
 }
 
 SYSTEM_PROMPT = """You are the intent parser for Jarvis, HeyGen's internal ops bot.
-Parse Slack utterances into structured intents. Be conservative with confidence — 
-if anything is ambiguous (wrong tier, missing email, unclear amount), set needs_clarification=true
-and ask a specific question. Do NOT guess on target_email.
+You may receive a full conversation history (multiple turns) or a single utterance.
+Your job: given everything said so far, decide whether you have enough information to
+propose a concrete action, or whether you still need to ask ONE clarifying question.
+
+Return ONE of two response shapes:
+1. PROPOSE — you have enough to act:
+   Set needs_clarification=false, fill all required fields, confidence >= 0.7
+2. CLARIFY — something critical is missing or ambiguous:
+   Set needs_clarification=true, set clarifying_question to ONE specific question,
+   confidence < 0.7
 
 Legal combinations:
 - quota_grant: credits only valid with tier=creator|pro|business
@@ -115,16 +122,36 @@ Raw CLI mode: if utterance starts with "!raw ", set action="unknown" and needs_c
 (this bypasses the LLM path in production)."""
 
 
-def parse_intent(utterance: str, model: str = "claude-haiku-4-5") -> dict[str, Any]:
-    """Parse a raw utterance into a structured intent dict."""
+def parse_intent(
+    utterance: str,
+    history: list[dict[str, str]] | None = None,
+    model: str = "claude-haiku-4-5",
+) -> dict[str, Any]:
+    """
+    Parse a raw utterance into a structured intent dict.
+
+    If history is provided (list of {role, text} dicts), the full conversation
+    context is passed to the LLM so it can resolve references and fill in
+    fields mentioned earlier in the thread.
+    """
     client = _get_client()
+
+    # Build message list: history first, then current utterance
+    messages: list[dict[str, Any]] = []
+    if history:
+        for msg in history:
+            role = "user" if msg.get("role") == "user" else "assistant"
+            messages.append({"role": role, "content": msg.get("text", "")})
+    # Always end with the latest user message
+    if not messages or messages[-1]["content"] != utterance:
+        messages.append({"role": "user", "content": utterance})
 
     response = client.messages.create(
         model=model,
         max_tokens=1024,
         temperature=0,  # deterministic — same input always produces same parse
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": utterance}],
+        messages=messages,
         tools=[INTENT_TOOL],
         tool_choice={"type": "tool", "name": "parse_intent"},
     )

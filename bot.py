@@ -44,6 +44,11 @@ from slack_client import (
     build_bulk_confirmation_card,
 )
 import heygen_cms_api as heygen
+from conversation_store import (
+    upsert_conversation, append_message as conv_append, get_conversation,
+    is_active as conv_is_active, set_state as conv_set_state,
+    list_expired_conversations, expire_conversation,
+)
 
 BOT_HTTP_PORT = int(os.environ.get("JARVIS_BOT_PORT", "8088"))
 BOT_HTTP_SECRET = os.environ.get("JARVIS_BOT_SECRET", "jarvis-internal-secret")
@@ -180,50 +185,35 @@ def _handle_mention_with_timeout(event: dict) -> None:
                 pass
 
 
-def handle_mention(event: dict[str, Any]) -> None:
-    """Process an @mention event (from any user in any channel the bot is in)."""
-    text = event.get("text", "")
-    user_id = event.get("user", "")
-    channel = event.get("channel", "")
-    ts = event.get("ts", "")
+def _clean_slack_text(text: str) -> str:
+    """Strip Slack mention syntax, mailto escapes, and bare angle-bracket URLs."""
+    text = re.sub(r"<@[A-Z0-9]+>", "", text).strip()
+    text = re.sub(r"<mailto:[^|>]+\|([^>]+)>", r"\1", text)
+    text = re.sub(r"<([^|>]+)>", r"\1", text)
+    return text.strip()
 
-    # Strip the bot mention prefix
-    clean_text = re.sub(r"<@[A-Z0-9]+>", "", text).strip()
 
-    # Strip Slack mailto escaping: <mailto:user@example.com|user@example.com> → user@example.com
-    clean_text = re.sub(r"<mailto:[^|>]+\|([^>]+)>", r"\1", clean_text)
-    # Also strip bare angle-bracket URLs Slack sometimes emits
-    clean_text = re.sub(r"<([^|>]+)>", r"\1", clean_text)
+def _process_utterance(
+    channel: str,
+    thread_ts: str,
+    user_id: str,
+    clean_text: str,
+) -> None:
+    """
+    Core logic: given clean text + conversation history, either clarify or propose.
+    Used by both @mention and thread-reply handlers.
+    """
+    # Fetch conversation history (may be empty for first message)
+    conv = get_conversation(thread_ts)
+    history: list[dict[str, str]] = conv["messages"] if conv else []
 
-    if not clean_text:
-        return
+    # Append user message to history
+    history = conv_append(thread_ts, channel, "user", clean_text)
 
-    print(f"[MENTION] {user_id} in {channel}: {clean_text}")
+    post_message(channel, "⏳ Thinking...", thread_ts=thread_ts)
 
-    # BUG-7 FIX: respond to all users; only block write confirms (not reads)
-    # Lookup/audit queries are open to all; write ops have auth check at confirm time.
-
-    # Raw CLI escape hatch
-    if clean_text.startswith("!raw "):
-        post_message(channel, "🔧 Raw CLI mode — bypassing NL parse. _(not yet wired)_", thread_ts=ts)
-        return
-
-    # Audit query
-    if clean_text.lower().startswith("audit "):
-        target_email = clean_text[6:].split()[0]
-        rows = query_audit(target_email=target_email, limit=5)
-        if not rows:
-            post_message(channel, f"No audit records found for `{target_email}`.", thread_ts=ts)
-        else:
-            lines = [f"*Last {len(rows)} actions for `{target_email}`:*"]
-            for r in rows:
-                lines.append(f"• `{r['action']}` → `{r['result']}` at {r['ts'][:16]} (audit: `{r['audit_id']}`)")
-            post_message(channel, "\n".join(lines), thread_ts=ts)
-        return
-
-    # Parse intent — BUG-4: use haiku (fast), no agentic loop
-    post_message(channel, "⏳ Parsing...", thread_ts=ts)
-    intent = parse_intent(clean_text)
+    # Pass full history to parser
+    intent = parse_intent(clean_text, history=history[:-1] if len(history) > 1 else None)
     print(f"[INTENT] {json.dumps(intent, indent=2)}")
 
     # Clarification needed
@@ -232,9 +222,18 @@ def handle_mention(event: dict[str, Any]) -> None:
             "I'm not sure I understood that correctly. Could you rephrase with "
             "the target email, action, amount, and duration?"
         )
+        # Record assistant question in history
+        conv_append(thread_ts, channel, "assistant", question)
+        # Keep state as GATHERING
+        updated_conv = get_conversation(thread_ts)
+        if updated_conv:
+            upsert_conversation(thread_ts, channel, updated_conv["messages"], state="GATHERING")
         blocks = build_clarifying_question_card(question)
-        post_message(channel, question, thread_ts=ts, blocks=blocks)
+        post_message(channel, question, thread_ts=thread_ts, blocks=blocks)
         return
+
+    # Intent resolved — transition to CONFIRMING
+    conv_set_state(thread_ts, "CONFIRMING", final_intent=intent)
 
     target_email = intent.get("target_email", "")
     action = intent.get("action")
@@ -246,7 +245,7 @@ def handle_mention(event: dict[str, Any]) -> None:
         resp = post_message(
             channel,
             f"Bulk grant preview for {len(intent.get('target_emails', []))} users — confirm or cancel below",
-            thread_ts=ts,
+            thread_ts=thread_ts,
             blocks=build_bulk_confirmation_card(intent, pending_id),
         )
         card_ts = resp["ts"]
@@ -255,7 +254,7 @@ def handle_mention(event: dict[str, Any]) -> None:
             intent=intent,
             before_state={},
             channel_id=channel,
-            thread_ts=ts,
+            thread_ts=thread_ts,
             message_ts=card_ts,
             pending_id=pending_id,
         )
@@ -272,39 +271,108 @@ def handle_mention(event: dict[str, Any]) -> None:
                 channel,
                 f"❌ User `{target_email}` not found in HeyGen (CMS code {code}). "
                 f"Check the email and try again.",
-                thread_ts=ts,
+                thread_ts=thread_ts,
             )
+            conv_set_state(thread_ts, "DONE")
             return
     elif action == "create_account":
-        before_state = {}  # BUG-3 fix: create_account now goes through dry-run like everything else
+        before_state = {}
     else:
         before_state = heygen.get_user_state(target_email)
 
-    # Allocate pending_id before posting card so it's embedded in button values
     import uuid
     pending_id = f"jrv_p_{uuid.uuid4().hex[:8]}"
 
-    # Post the dry-run card with Block Kit buttons
     resp = post_message(
         channel,
         f"Action preview for `{target_email}` — confirm or cancel below",
-        thread_ts=ts,
+        thread_ts=thread_ts,
         blocks=build_confirmation_card(intent, before_state, pending_id),
     )
     card_ts = resp["ts"]
 
-    # Store pending with pre-allocated ID
     write_pending(
         actor_slack_id=user_id,
         intent=intent,
         before_state=before_state,
         channel_id=channel,
-        thread_ts=ts,
+        thread_ts=thread_ts,
         message_ts=card_ts,
         pending_id=pending_id,
     )
-
     print(f"[PENDING] {pending_id} stored, waiting for button click on {card_ts}")
+
+
+def handle_mention(event: dict[str, Any]) -> None:
+    """Process an @mention event (from any user in any channel the bot is in)."""
+    text = event.get("text", "")
+    user_id = event.get("user", "")
+    channel = event.get("channel", "")
+    ts = event.get("ts", "")
+    # thread_ts: if this mention is itself a reply, use its thread; otherwise use its own ts
+    thread_ts = event.get("thread_ts") or ts
+
+    clean_text = _clean_slack_text(text)
+    if not clean_text:
+        return
+
+    print(f"[MENTION] {user_id} in {channel}: {clean_text}")
+
+    # Raw CLI escape hatch
+    if clean_text.startswith("!raw "):
+        post_message(channel, "🔧 Raw CLI mode — bypassing NL parse. _(not yet wired)_", thread_ts=thread_ts)
+        return
+
+    # Audit query (read-only, bypass conversation flow)
+    if clean_text.lower().startswith("audit "):
+        target_email = clean_text[6:].split()[0]
+        rows = query_audit(target_email=target_email, limit=5)
+        if not rows:
+            post_message(channel, f"No audit records found for `{target_email}`.", thread_ts=thread_ts)
+        else:
+            lines = [f"*Last {len(rows)} actions for `{target_email}`:*"]
+            for r in rows:
+                lines.append(f"• `{r['action']}` → `{r['result']}` at {r['ts'][:16]} (audit: `{r['audit_id']}`)")
+            post_message(channel, "\n".join(lines), thread_ts=thread_ts)
+        return
+
+    # Ensure conversation exists for this thread
+    if not conv_is_active(thread_ts):
+        upsert_conversation(thread_ts, channel, [], state="GATHERING")
+
+    _process_utterance(channel, thread_ts, user_id, clean_text)
+
+
+def handle_thread_reply(event: dict[str, Any]) -> None:
+    """
+    Process a plain (non-@mention) message in a thread where Jarvis is GATHERING.
+    Only fires if the thread has an active GATHERING conversation.
+    """
+    # Ignore bot messages
+    if event.get("bot_id") or event.get("subtype"):
+        return
+
+    thread_ts = event.get("thread_ts")
+    if not thread_ts:
+        return  # top-level message, not a thread reply
+
+    if not conv_is_active(thread_ts):
+        return  # not an active Jarvis conversation
+
+    conv = get_conversation(thread_ts)
+    if not conv or conv["state"] != "GATHERING":
+        return  # only respond during GATHERING (not CONFIRMING/DONE)
+
+    text = event.get("text", "")
+    user_id = event.get("user", "")
+    channel = event.get("channel", "")
+
+    clean_text = _clean_slack_text(text)
+    if not clean_text:
+        return
+
+    print(f"[THREAD_REPLY] {user_id} in {channel} (thread {thread_ts}): {clean_text}")
+    _process_utterance(channel, thread_ts, user_id, clean_text)
 
 
 def handle_block_action(body: dict[str, Any]) -> None:
@@ -604,8 +672,27 @@ def _expiry_sweep() -> None:
                     )
                 except Exception as e:
                     print(f"[EXPIRE] failed to post expiry notice for {pending_id}: {e}")
+
         except Exception as e:
             print(f"[EXPIRE] sweep error: {e}")
+
+        # Also expire stale conversations
+        try:
+            for conv in list_expired_conversations():
+                thread_ts = conv["thread_ts"]
+                expire_conversation(thread_ts)
+                print(f"[EXPIRE_CONV] thread {thread_ts} expired (state was {conv['state']})")
+                if conv["state"] == "GATHERING":
+                    try:
+                        post_message(
+                            conv["channel_id"],
+                            "⏰ Conversation timed out — mention me again to start over.",
+                            thread_ts=thread_ts,
+                        )
+                    except Exception as e:
+                        print(f"[EXPIRE_CONV] failed to post notice for {thread_ts}: {e}")
+        except Exception as e:
+            print(f"[EXPIRE_CONV] sweep error: {e}")
         threading.Event().wait(EXPIRY_SWEEP_INTERVAL)
 
 
@@ -635,7 +722,8 @@ def on_cancel_action(ack, body):
 
 @app.event("message")
 def on_message(event):
-    pass
+    t = threading.Thread(target=handle_thread_reply, args=(event,), daemon=True)
+    t.start()
 
 
 # ---------------------------------------------------------------------------
