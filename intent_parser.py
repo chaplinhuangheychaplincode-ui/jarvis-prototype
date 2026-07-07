@@ -44,7 +44,7 @@ INTENT_TOOL = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["quota_grant", "create_account", "lookup", "ent_sub_grant", "bulk_grant", "explain", "unknown"],
+                "enum": ["quota_grant", "create_account", "lookup", "ent_sub_grant", "bulk_grant", "explain", "revoke_grant", "unknown"],
                 "description": "The action to perform",
             },
             "target_email": {
@@ -80,6 +80,15 @@ INTENT_TOOL = {
             "ae_attribution": {
                 "type": "string",
                 "description": "AE name for enterprise sub attribution",
+            },
+            "quota_id": {
+                "type": "string",
+                "description": "Specific quota_id to expire (for revoke_grant of a credit grant)",
+            },
+            "revoke_type": {
+                "type": "string",
+                "enum": ["subscription", "quota", "both"],
+                "description": "For revoke_grant: what to revoke — subscription, a specific quota grant, or both",
             },
             "confidence": {
                 "type": "number",
@@ -123,7 +132,13 @@ Raw CLI mode: if utterance starts with "!raw ", set action="unknown" and needs_c
 
 Help/onboarding: if the user asks what you can do, what commands exist, or how to use you,
 set action="explain" and needs_clarification=false. Examples: "what can you do",
-"help", "show me commands", "how do I use this", "what are your capabilities"."""
+"help", "show me commands", "how do I use this", "what are your capabilities".
+
+Revoke: if the user wants to cancel, undo, revoke, or remove a grant set action="revoke_grant".
+- If they mention a quota_id, set quota_id and revoke_type="quota".
+- If they say "cancel sub" or "remove subscription", set revoke_type="subscription".
+- If no quota_id given and they say "cancel everything" or "revoke all", set revoke_type="both".
+- target_email is always required for revoke_grant."""
 
 
 def parse_intent(

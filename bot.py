@@ -319,7 +319,7 @@ def _process_utterance(
         return
 
     # Guard: validate user exists for ops that require it
-    if action in ("lookup", "quota_grant"):
+    if action in ("lookup", "quota_grant", "revoke_grant"):
         before_state = heygen.get_user_state(target_email)
         if before_state.get("user_id") is None:
             err = before_state.get("error", {})
@@ -478,19 +478,8 @@ def handle_block_action(body: dict[str, Any]) -> None:
         post_message(channel_id, "❌ Cancelled.", thread_ts=thread_ts)
         return
 
-    # ✅ Confirm — write ops require authorization
+    # ✅ Confirm — open to all users (internal channel, audit log tracks who confirmed)
     if action_id == "confirm_action":
-        # BUG-7 related: non-authorized users get a clear rejection
-        if intent.get("action") != "lookup" and not is_authorized(user_id):
-            user_info = get_user_info(user_id)
-            name = user_info.get("real_name", user_id)
-            post_message(
-                channel_id,
-                f"⛔ <@{user_id}> ({name}) is not authorized to confirm write ops. "
-                f"Only <@{OWNER_SLACK_ID}> can confirm.",
-                thread_ts=thread_ts,
-            )
-            return
 
         # BUG-5 FIX: Atomic claim — prevents duplicate execution
         claimed = claim_pending(pending_id)
@@ -602,6 +591,17 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
             tier=intent.get("tier"),
             duration_days=intent.get("duration_days"),
         )
+    elif action == "revoke_grant":
+        revoke_type = intent.get("revoke_type", "subscription")
+        quota_id = intent.get("quota_id")
+        results: dict[str, Any] = {"email": email, "action": "revoke_grant", "revoke_type": revoke_type}
+        if revoke_type in ("subscription", "both"):
+            results["subscription_result"] = heygen.execute_subscription_remove(email)
+        if revoke_type in ("quota", "both") and quota_id:
+            results["quota_result"] = heygen.execute_quota_expire(quota_id)
+        elif revoke_type == "quota" and not quota_id:
+            results["error"] = "quota_id required for quota revoke"
+        return results
     else:
         return {"action": action, "status": "not_implemented"}
 

@@ -29,6 +29,13 @@
       "example": "bulk grant creator tier + 200 credits to: a@x.com, b@x.com, c@x.com",
       "cms_endpoints": ["/v1/internal/movio/gift_subscription.add"],
       "write": true
+    },
+    {
+      "name": "revoke_grant",
+      "description": "Cancel a subscription or expire a specific credit grant for a user",
+      "example": "revoke subscription for user@example.com  |  expire quota abc123 for user@example.com",
+      "cms_endpoints": ["/v1/internal/movio/gift_subscription.remove", "/v1/internal/movio/gift_quota.expire"],
+      "write": true
     }
   ],
   "coming_soon": [

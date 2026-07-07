@@ -333,6 +333,18 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
         fields.append({"type": "mrkdwn", "text": f"*Created:*\n`{after.get('created', False)}`"})
         if after.get("tier"):
             fields.append({"type": "mrkdwn", "text": f"*Tier:*\n`{after['tier']}`"})
+    elif action == "revoke_grant":
+        revoke_type = after.get("revoke_type", "subscription")
+        fields.append({"type": "mrkdwn", "text": f"*Revoke type:*\n`{revoke_type}`"})
+        sub_result = after.get("subscription_result", {})
+        if sub_result:
+            ok = sub_result.get("removed", False)
+            fields.append({"type": "mrkdwn", "text": f"*Subscription removed:*\n`{ok}`"})
+        quota_result = after.get("quota_result", {})
+        if quota_result:
+            ok = quota_result.get("expired", False)
+            fields.append({"type": "mrkdwn", "text": f"*Quota expired:*\n`{ok}`"})
+            fields.append({"type": "mrkdwn", "text": f"*Quota ID:*\n`{after.get('quota_id', '?')}`"})
     return fields
 
 
@@ -362,6 +374,12 @@ def _format_action_summary(intent: dict[str, Any], before: dict[str, Any]) -> st
 
     elif action == "lookup":
         return f"*Lookup* — `{target}` _(read-only, no changes)_"
+
+    elif action == "revoke_grant":
+        revoke_type = intent.get("revoke_type", "subscription")
+        quota_id = intent.get("quota_id")
+        detail = f" · quota_id `{quota_id}`" if quota_id else ""
+        return f"*Revoke Grant* for `{target}` · type: *{revoke_type}*{detail}"
 
     elif action == "ent_sub_grant":
         ae = intent.get("ae_attribution", "?")
