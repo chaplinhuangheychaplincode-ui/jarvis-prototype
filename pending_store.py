@@ -15,7 +15,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-DB_PATH = os.path.expanduser("~/.hermes/jarvis_pending.sqlite")
+_env = os.environ.get("JARVIS_ENV", "dev")
+_suffix = "_prod" if _env == "prod" else ""
+DB_PATH = os.path.expanduser(f"~/.hermes/jarvis_pending{_suffix}.sqlite")
 EXPIRY_MINUTES = 15
 
 

@@ -57,7 +57,13 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-CMS_BASE = "https://cms-api-dev.heygendev.com"
+import os as _os
+_JARVIS_ENV = _os.environ.get("JARVIS_ENV", "dev")
+CMS_BASE = (
+    "https://cms-api.heygendev.com"
+    if _JARVIS_ENV == "prod"
+    else "https://cms-api-dev.heygendev.com"
+)
 
 # ---------------------------------------------------------------------------
 # Auth — cached to avoid spawning a subprocess on every call

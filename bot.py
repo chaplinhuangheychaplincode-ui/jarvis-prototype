@@ -54,8 +54,9 @@ from conversation_store import (
 BOT_HTTP_PORT = int(os.environ.get("JARVIS_BOT_PORT", "8088"))
 BOT_HTTP_SECRET = os.environ.get("JARVIS_BOT_SECRET", "jarvis-internal-secret")
 CONFIDENCE_THRESHOLD = 0.70
-BOT_USER_ID = "U0BERJGULPQ"   # @jarvisjustbot (new dedicated app)
-OWNER_SLACK_ID = "U0BBD6002R2"  # yichi.huang — authorized to confirm write ops
+JARVIS_ENV = os.environ.get("JARVIS_ENV", "dev")
+BOT_USER_ID = os.environ.get("JARVIS_BOT_USER_ID", "U0BERJGULPQ")   # overridden per env
+OWNER_SLACK_ID = "U0BBD6002R2"  # yichi.huang — audit log reference (write ops open to all)
 REQUEST_TIMEOUT = 10  # seconds — hard cap per attempt
 REQUEST_MAX_RETRIES = 3  # total attempts before giving up
 

@@ -78,7 +78,7 @@ def _ch_insert(row: list) -> None:
                     "before_json", "after_json", "result",
                     "nl_utterance", "nl_confidence",
                     "slack_channel_id", "slack_message_ts",
-                    "batch_id", "reason",
+                    "batch_id", "reason", "env",
                 ],
             )
             return  # success
@@ -128,6 +128,7 @@ def write_audit(
         message_ts,
         batch_id,
         intent.get("reason"),
+        os.environ.get("JARVIS_ENV", "dev"),
     ]
 
     _ch_insert(row)
