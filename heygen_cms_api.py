@@ -86,8 +86,9 @@ def _get_api_key() -> str:
 
 def _post(path: str, data: dict[str, Any]) -> dict[str, Any]:
     key = _get_api_key()
+    url = f"{CMS_BASE}{path}"
     req = urllib.request.Request(
-        f"{CMS_BASE}{path}",
+        url,
         data=json.dumps(data).encode(),
         headers={"Content-Type": "application/json", "x-api-key": key},
         method="POST",
@@ -96,21 +97,40 @@ def _post(path: str, data: dict[str, Any]) -> dict[str, Any]:
         resp = urllib.request.urlopen(req, timeout=10)
         return json.loads(resp.read())
     except urllib.error.HTTPError as e:
+        print(f"[CMS] HTTP {e.code} on POST {url}", flush=True)
         body = e.read()
         try:
             return json.loads(body)
         except Exception:
             return {"code": e.code, "message": body.decode()[:300]}
+    except urllib.error.URLError as e:
+        print(f"[CMS] URLError on POST {url}: {e.reason}", flush=True)
+        return {"code": -1, "message": f"Network error: {e.reason}"}
+    except Exception as e:
+        print(f"[CMS] Unexpected error on POST {url}: {e}", flush=True)
+        return {"code": -1, "message": str(e)}
 
 
 def _get(path: str) -> dict[str, Any]:
     key = _get_api_key()
-    req = urllib.request.Request(
-        f"{CMS_BASE}{path}",
-        headers={"x-api-key": key},
-    )
-    resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
-    return resp
+    url = f"{CMS_BASE}{path}"
+    req = urllib.request.Request(url, headers={"x-api-key": key})
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+        return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        print(f"[CMS] HTTP {e.code} on GET {url}", flush=True)
+        body = e.read()
+        try:
+            return json.loads(body)
+        except Exception:
+            return {"code": e.code, "message": body.decode()[:300]}
+    except urllib.error.URLError as e:
+        print(f"[CMS] URLError on GET {url}: {e.reason}", flush=True)
+        return {"code": -1, "message": f"Network error: {e.reason}"}
+    except Exception as e:
+        print(f"[CMS] Unexpected error on GET {url}: {e}", flush=True)
+        return {"code": -1, "message": str(e)}
 
 
 # ---------------------------------------------------------------------------
