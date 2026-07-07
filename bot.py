@@ -501,19 +501,35 @@ def handle_block_action(body: dict[str, Any]) -> None:
         )
 
         # TOCTOU: re-snapshot before executing (skip for create_account — no meaningful before_state)
+        # Wrapped in try/except — if state fetch fails we reset to pending so the card stays retryable
         if intent.get("action") != "create_account":
-            current_state = heygen.get_user_state(target_email) if target_email else {}
-            if current_state and current_state != before_state:
-                reset_to_pending(pending_id, json.dumps(current_state))
-                # Rebuild card with fresh state
+            try:
+                current_state = heygen.get_user_state(target_email) if target_email else {}
+                if current_state and current_state != before_state:
+                    reset_to_pending(pending_id, json.dumps(current_state))
+                    # Rebuild card with fresh state
+                    update_message(
+                        channel_id, pending["message_ts"],
+                        f"⚠️ State changed — please confirm again",
+                        blocks=build_confirmation_card(intent, current_state, pending_id),
+                    )
+                    post_message(
+                        channel_id,
+                        "⚠️ State changed since dry-run. Updated preview above — click ✅ Confirm again.",
+                        thread_ts=thread_ts,
+                    )
+                    return
+            except Exception as snap_err:
+                print(f"[TOCTOU] re-snapshot failed, resetting to pending: {snap_err}", flush=True)
+                reset_to_pending(pending_id, json.dumps(before_state))
                 update_message(
                     channel_id, pending["message_ts"],
-                    f"⚠️ State changed — please confirm again",
-                    blocks=build_confirmation_card(intent, current_state, pending_id),
+                    f"⚠️ Could not verify current state — please retry",
+                    blocks=build_confirmation_card(intent, before_state, pending_id),
                 )
                 post_message(
                     channel_id,
-                    "⚠️ State changed since dry-run. Updated preview above — click ✅ Confirm again.",
+                    f"⚠️ Could not verify current state (`{snap_err}`). Action reset — click ✅ to retry.",
                     thread_ts=thread_ts,
                 )
                 return
