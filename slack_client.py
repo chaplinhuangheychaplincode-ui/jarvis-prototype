@@ -44,8 +44,7 @@ def _call(method: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def post_message(channel: str, text: str, thread_ts: str | None = None,
                  blocks: list | None = None) -> dict[str, Any]:
-    # 🐱 prefix on every message so it's clear bot.py is responding (not the Hermes gateway)
-    text = f"🐱 {text}"
+    # prefix removed — bot identity is clear from the app name
     payload: dict[str, Any] = {"channel": channel, "text": text}
     if thread_ts:
         payload["thread_ts"] = thread_ts

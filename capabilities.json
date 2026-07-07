@@ -4,7 +4,6 @@
   "ops": [
     {
       "name": "lookup",
-      "emoji": "🔍",
       "description": "Look up a user's current tier, credits, quota, and account status",
       "example": "who is user@example.com",
       "cms_endpoints": ["/v1/internal/movio/user.get"],
@@ -12,7 +11,6 @@
     },
     {
       "name": "quota_grant",
-      "emoji": "🎁",
       "description": "Grant generative credits or change a user's subscription tier",
       "example": "give user@example.com 500 credits on creator tier for 90 days",
       "cms_endpoints": ["/v1/internal/movio/gift_subscription.add"],
@@ -20,7 +18,6 @@
     },
     {
       "name": "create_account",
-      "emoji": "🆕",
       "description": "Create a new HeyGen account, optionally with a comped subscription",
       "example": "create account for new@example.com on pro tier for 30 days",
       "cms_endpoints": ["/v1/internal/create_account", "/v1/internal/movio/gift_subscription.add"],
@@ -28,7 +25,6 @@
     },
     {
       "name": "bulk_grant",
-      "emoji": "📦",
       "description": "Grant credits or tier to a batch of up to 100 users at once",
       "example": "bulk grant creator tier + 200 credits to: a@x.com, b@x.com, c@x.com",
       "cms_endpoints": ["/v1/internal/movio/gift_subscription.add"],

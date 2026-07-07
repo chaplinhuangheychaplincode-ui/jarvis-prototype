@@ -214,7 +214,6 @@ def handle_explain(channel: str, thread_ts: str) -> None:
     ]
 
     for op in ops:
-        emoji = op.get("emoji", "•")
         name = op.get("name", "")
         desc = op.get("description", "")
         example = op.get("example", "")
@@ -224,7 +223,7 @@ def handle_explain(channel: str, thread_ts: str) -> None:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*{emoji} {name}*{tag}\n{desc}\n> _{example}_",
+                "text": f"*{name}*{tag}\n{desc}\n> _{example}_",
             },
         })
 
