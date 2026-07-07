@@ -267,16 +267,53 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
         if fields:
             for i in range(0, len(fields), 10):
                 blocks.append({"type": "section", "fields": fields[i:i+10]})
-        # Quotas summary — key/value only, not full raw JSON
+
+        lookup_fields = after_state.get("_lookup_fields", [])
+
+        # Surface any specifically requested top-level fields (tier, api_tier, etc.) that aren't in quotas
+        TOP_LEVEL_FIELDS = {"tier", "api_tier", "internal", "country_code", "registration_ts", "user_id", "space_id"}
+        pinned_top = [f for f in lookup_fields if f in TOP_LEVEL_FIELDS and after_state.get(f) is not None]
+        if pinned_top:
+            pin_parts = [f"*{k}:* `{after_state[k]}`" for k in pinned_top]
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "📌 *Requested:* " + " · ".join(pin_parts)},
+            })
+        lookup_fields = after_state.get("_lookup_fields", [])
         quotas = after_state.get("quotas", {})
         if quotas and isinstance(quotas, dict):
-            quota_parts = [f"`{k}`: {v}" for k, v in list(quotas.items())[:5]]
-            if len(quotas) > 5:
-                quota_parts.append(f"… +{len(quotas)-5} more")
-            blocks.append({
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": "📊 Quotas: " + " · ".join(quota_parts)}],
-            })
+            def _fmt_quota(val: Any) -> str:
+                if isinstance(val, dict):
+                    rem = val.get("remaining", val.get("remain", "?"))
+                    tot = val.get("total", val.get("limit", "?"))
+                    exp = val.get("expire_at") or val.get("expired_at") or val.get("expires", "")
+                    s = f"{rem} / {tot}"
+                    if exp:
+                        s += f" (exp {str(exp)[:10]})"
+                    return s
+                return str(val)
+
+            # If specific fields were requested, show those prominently first
+            pinned_keys = [f for f in lookup_fields if f in quotas]
+            other_keys = [k for k in quotas if k not in pinned_keys]
+            ordered_keys = pinned_keys + other_keys
+
+            if pinned_keys:
+                # Highlighted section for specifically requested fields
+                pin_parts = [f"*{k}:* `{_fmt_quota(quotas[k])}`" for k in pinned_keys]
+                blocks.append({
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "📌 *Requested:* " + " · ".join(pin_parts)},
+                })
+
+            quota_parts = [f"`{k}`: {_fmt_quota(quotas[k])}" for k in other_keys[:8]]
+            if len(other_keys) > 8:
+                quota_parts.append(f"… +{len(other_keys)-8} more")
+            if quota_parts:
+                blocks.append({
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": "📊 Quotas: " + " · ".join(quota_parts)}],
+                })
         blocks.append({
             "type": "context",
             "elements": [{"type": "mrkdwn", "text": f"🔎 Audit: `{audit_id}` _(read logged)_"}],

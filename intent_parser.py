@@ -71,7 +71,13 @@ INTENT_TOOL = {
             },
             "product": {
                 "type": "string",
-                "description": "Specific product (for API quota: 'api'; for generative: 'generative_credit')",
+                "enum": ["generative_credit", "plan_credit", "api", "seat", "video_translate", "avatar_video", "personalized_video"],
+                "description": "Credit/quota type for quota_grant. Default: generative_credit. Use 'api' for API quota, 'seat' for seats, 'video_translate' for translation quota, etc.",
+            },
+            "lookup_fields": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "For lookup only: if the user asks about specific fields (e.g. 'what are their generative credits', 'show me their tier'), list the field names here (e.g. ['generative_credit'], ['tier'], ['api_tier']). Quota field names match the product types above. Top-level fields: tier, api_tier, internal, country_code.",
             },
             "reason": {
                 "type": "string",
@@ -119,6 +125,15 @@ Return ONE of two response shapes:
    Set needs_clarification=true, set clarifying_question to ONE specific question,
    confidence < 0.7
 
+Credit/quota product types (use in `product` field):
+- generative_credit — standard AI generation credits (DEFAULT; also accepts "credits")
+- plan_credit — credits bundled with a subscription plan
+- api — API call quota
+- seat — team/workspace seats
+- video_translate — video translation quota
+- avatar_video — avatar video quota
+- personalized_video — personalized video quota
+
 Legal combinations:
 - quota_grant: credits only valid with tier=creator|pro|business
 - API quota grants use product="api", no tier needed
@@ -126,6 +141,13 @@ Legal combinations:
 - bulk_grant: use when there are multiple target emails OR explicit "bulk"/"batch"/"all these users" language.
   Extract ALL emails from the utterance into target_emails (list). Max 100.
   If the description says "these users" with no list inline, set needs_clarification=true asking for the list.
+
+Lookup field extraction:
+- If the user asks about a SPECIFIC field (e.g. "what are their generative credits?", "show me their API quota",
+  "what tier are they on?"), set lookup_fields to the list of field names they want.
+- Quota field names match the product types: generative_credit, plan_credit, api, seat, video_translate, avatar_video, personalized_video.
+- Top-level state fields: tier, api_tier, internal, country_code, registration_ts.
+- If the user just asks "who is X" or "look up X" with no specific field, leave lookup_fields empty.
 
 Raw CLI mode: if utterance starts with "!raw ", set action="unknown" and needs_clarification=false
 (this bypasses the LLM path in production).

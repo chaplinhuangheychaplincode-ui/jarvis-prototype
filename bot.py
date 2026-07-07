@@ -591,7 +591,12 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
     email = intent.get("target_email", "")
 
     if action == "lookup":
-        return heygen.lookup_user(email)
+        result = heygen.lookup_user(email)
+        # Carry requested fields through so the card renderer can highlight them
+        lookup_fields = intent.get("lookup_fields") or []
+        if lookup_fields:
+            result["_lookup_fields"] = lookup_fields
+        return result
     elif action == "quota_grant":
         return heygen.execute_quota_grant(
             email=email,

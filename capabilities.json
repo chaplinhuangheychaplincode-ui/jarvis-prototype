@@ -11,9 +11,10 @@
     },
     {
       "name": "quota_grant",
-      "description": "Grant generative credits or change a user's subscription tier",
+      "description": "Grant credits or change a user's subscription tier",
       "example": "give user@example.com 500 credits on creator tier for 90 days",
-      "cms_endpoints": ["/v1/internal/movio/gift_subscription.add"],
+      "credit_types": ["generative_credit (default)", "plan_credit", "api", "seat", "video_translate", "avatar_video", "personalized_video"],
+      "cms_endpoints": ["/v1/internal/movio/gift_subscription.add", "/v1/internal/movio/gift_quota.add"],
       "write": true
     },
     {
