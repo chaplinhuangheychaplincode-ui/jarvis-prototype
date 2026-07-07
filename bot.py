@@ -297,16 +297,6 @@ def _process_utterance(
     target_email = intent.get("target_email", "")
     action = intent.get("action")
 
-    # ---- REDUCE GRANT — disabled (API danger) ----
-    if action == "reduce_grant":
-        post_message(
-            channel,
-            "⚠️ *reduce_grant is disabled* — `gift_quota.deduct` by email+feature wipes entire grants rather than subtracting a specific amount. This corrupted jameswgoodman1971@gmail.com's balance. Use `revoke_grant` with a `quota_id` to safely remove a specific grant.",
-            thread_ts=thread_ts,
-        )
-        conv_set_state(thread_ts, "DONE")
-        return
-
     # ---- BULK GRANT path ----
     if action == "bulk_grant":
         import uuid
@@ -661,13 +651,12 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
             results["error"] = "quota_id required for quota revoke"
         return results
     elif action == "reduce_grant":
-        # DISABLED: gift_quota.deduct with email+feature expires entire grants, not specific credits.
-        # The API ignores the `amount` param and wipes whole grant(s). Needs quota_id for safe deduct.
-        return {
-            "email": email,
-            "action": "reduce_grant",
-            "error": "reduce_grant is temporarily disabled — the underlying CMS API (gift_quota.deduct by email+feature) expires entire grants rather than deducting specific credit amounts. Use revoke_grant to remove a grant by quota_id instead.",
-        }
+        credits = intent.get("credits")
+        product = intent.get("product", "generative_credit")
+        if not credits:
+            return {"email": email, "action": "reduce_grant", "error": "credits (amount to deduct) required"}
+        result = heygen.execute_quota_deduct(email=email, product=product, amount=credits)
+        return result
     else:
         return {"action": action, "status": "not_implemented"}
 

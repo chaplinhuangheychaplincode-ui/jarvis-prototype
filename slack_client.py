@@ -467,12 +467,12 @@ def _format_request_body(intent: dict[str, Any]) -> str:
         has_tier = tier and tier.lower() in _VALID_TIERS_CLIENT
         if has_tier:
             quotas = {product: credits} if credits else {}
-            body = {"email": email, "tier": tier.lower(), "expired_days": days,
+            body = {"email": email, "tier": tier.lower(), "day": days,
                     "quotas": quotas, "trial": True}
             return f"POST /v1/internal/movio/gift_subscription.add\n{json.dumps(body, indent=2)}"
         else:
             body = {"email": email, "feature": product,
-                    "quota": credits, "expired_days": days}
+                    "quota": credits, "expire_days": days}
             return f"POST /v1/internal/movio/gift_quota.add\n{json.dumps(body, indent=2)}"
 
     elif action == "revoke_grant":
@@ -505,10 +505,10 @@ def _format_request_body(intent: dict[str, Any]) -> str:
         has_tier = tier and tier.lower() in _VALID_TIERS_CLIENT
         if has_tier:
             sample = {"email": "<each of %d>" % n, "tier": tier.lower(),
-                      "expired_days": days, "quotas": {product: credits} if credits else {}, "trial": True}
+                      "day": days, "quotas": {product: credits} if credits else {}, "trial": True}
             return f"POST /v1/internal/movio/gift_subscription.add × {n}\n{json.dumps(sample, indent=2)}"
         sample = {"email": "<each of %d>" % n, "feature": product,
-                  "quota": credits, "expired_days": days}
+                  "quota": credits, "expire_days": days}
         return f"POST /v1/internal/movio/gift_quota.add × {n}\n{json.dumps(sample, indent=2)}"
 
     elif action == "reduce_grant":

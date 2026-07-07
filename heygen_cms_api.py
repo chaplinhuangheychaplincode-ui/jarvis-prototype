@@ -9,35 +9,36 @@ Confirmed endpoints (all POST, auth via x-api-key header):
 
   WRITE — quota (credits only, no tier change):
     /v1/internal/movio/gift_quota.add
-        body: {"email": str, "feature": str, "quota": int, "expired_days": int, "note"?: str}
+        body: {"email": str, "feature": QuotaFeature, "quota": int=600, "expire_days": int=30}
         → returns {quota_id, total, remaining, expires, message}
-        features: "generative_credit" | "plan_credit" | "api" | "seat" |
-                  "regular" | "unlimited_regular" | "video_translate" |
-                  "avatar_video" | "personalized_video"
+        QuotaFeature values: "regular" | "unlimited_regular" | "generative_credit" |
+                  "api" | "seat" | "video_translate" | "avatar_video" |
+                  "personalized_video" | "streaming_avatar" | ...
     /v1/internal/movio/gift_quota.expire
-        body: {"quota_id": str}   — revoke a specific grant by ID
+        body: {"quota_id": str}
     /v1/internal/movio/gift_quota.deduct
-        body: {"quota_id": str, "amount": int}
+        body: {"email": str, "feature": QuotaFeature, "quota": int}  ← NOT "amount"
 
   WRITE — subscription (full comp: tier + quota bundle, replaces existing sub):
     /v1/internal/movio/gift_subscription.add
         body: {
-            "email": str,           # required (or "username")
-            "tier": str,            # optional: "creator"|"pro"|"business" (default creator)
-            "expired_days": int,    # optional: duration (default system default)
+            "email": str,           # required (or "username"/"space_id")
+            "tier": str,            # "creator"|"pro"|"business"|"enterprise"|"team"|"business_plus"
+            "day": int,             # duration in days (default 30)  ← NOT "expired_days"
             "quotas": dict,         # REQUIRED (may be empty {}); {"generative_credit": N, ...}
-            "trial": bool,          # optional, default True
-            "api_sub": bool,        # optional, default False
-            "cancel_self_serve": bool,  # optional
+            "trial": bool,          # default True
+            "api_sub": bool,        # default False
+            "cancel_self_serve": bool,
+            "seat_limit": int,      # optional, ge=1, le=300
+            "usage_mode": str,      # optional
+            "provision_source": str, # "poc"|"sales"|"partner"|"internal"
+            "credit": bool,         # default False — credit-based gift sub
         }
         → returns {space_id, api_sub, seat_limit, usage_mode, granted_seconds}
-        Side effects: cancels existing subscription, creates new one, adds quotas,
-                      applies seat limit, brand kit, oracle adoption triggers.
     /v1/internal/movio/gift_subscription.remove
-        body: {"email": str}   — strips sub back to free tier
+        body: {"email": str}
     /v1/internal/movio/gift_subscription.upgrade
-        body: {"email": str, "tier": str, "expired_days"?: int, "quotas"?: dict}
-        Note: requires the user to have an existing active subscription.
+        body: {"email": str, "tier": str, "api_sub"?: bool, "usage_mode"?: str}
 
   WRITE — account:
     /v1/internal/create_account
@@ -144,16 +145,29 @@ def _get(path: str) -> dict[str, Any]:
 # Feature name normalisation
 # ---------------------------------------------------------------------------
 _FEATURE_MAP = {
+    # generative credits (most common)
     "credits": "generative_credit",
     "generative_credit": "generative_credit",
     "generative": "generative_credit",
+    # plan credits
     "plan_credit": "plan_credit",
     "plan": "plan_credit",
+    # regular video renders (QuotaFeature.REGULAR)
+    "regular": "regular",
+    "video": "regular",
+    # API quota
     "api": "api",
+    # seats
     "seat": "seat",
+    "seats": "seat",
+    # other quota types
     "video_translate": "video_translate",
+    "vt": "video_translate",
     "avatar_video": "avatar_video",
     "personalized_video": "personalized_video",
+    "pv": "personalized_video",
+    "unlimited_regular": "unlimited_regular",
+    "streaming_avatar": "streaming_avatar",
 }
 
 VALID_TIERS = {"creator", "pro", "business", "enterprise"}
@@ -252,7 +266,7 @@ def _execute_subscription_grant(
     resp = _post("/v1/internal/movio/gift_subscription.add", {
         "email": email,
         "tier": tier.lower(),
-        "expired_days": duration_days,
+        "day": duration_days,           # AddGiftSubscriptionRequest.day, NOT "expired_days"
         "quotas": quotas,
         "trial": True,
     })
@@ -286,14 +300,19 @@ def _execute_credit_top_up(
 ) -> dict[str, Any]:
     """
     Credits-only top-up via gift_quota.add (no tier change).
+    Fields per AddGiftQuotaRequest:
+      - email: str (required)
+      - feature: QuotaFeature (default: REGULAR="regular")
+      - quota: int (default: 600, ge=0)  ← NOT "total"
+      - expire_days: int (default: 30, ge=1, le=1825)  ← NOT "expired_days"
+      - quota_type: Optional[str] — "withsubscrition" = no expiry
     """
     feature = _normalize_feature(product)
     resp = _post("/v1/internal/movio/gift_quota.add", {
         "email": email,
         "feature": feature,
         "quota": credits,
-        "expired_days": duration_days,
-        "note": f"jarvis credit top-up tier_note={tier_note}",
+        "expire_days": duration_days,
     })
     if resp.get("code") != 100:
         return {"email": email, "error": resp, "granted": False, "action": "credit_top_up"}
@@ -338,12 +357,18 @@ def execute_quota_expire(quota_id: str) -> dict[str, Any]:
 
 
 def execute_quota_deduct(email: str, product: str, amount: int) -> dict[str, Any]:
-    """Deduct (reduce) credits from a user by email+feature — no quota_id needed."""
+    """
+    Deduct credits from a user by email+feature — no quota_id needed.
+    Fields per DeductGiftQuotaRequest:
+      - email: str (required)
+      - feature: QuotaFeature (default: REGULAR="regular")
+      - quota: int (default: 600, ge=0, le=1000000)  ← NOT "amount"
+    """
     feature = _normalize_feature(product)
     resp = _post("/v1/internal/movio/gift_quota.deduct", {
         "email": email,
         "feature": feature,
-        "amount": amount,
+        "quota": amount,    # field is "quota", NOT "amount"
     })
     return {
         "email": email,
@@ -386,7 +411,7 @@ def execute_create_account(email: str, tier: str | None = None, duration_days: i
         sub_resp = _post("/v1/internal/movio/gift_subscription.add", {
             "email": email,
             "tier": tier.lower(),
-            "expired_days": duration_days,
+            "day": duration_days,           # AddGiftSubscriptionRequest.day, NOT "expired_days"
             "quotas": {},
             "trial": True,
         })
