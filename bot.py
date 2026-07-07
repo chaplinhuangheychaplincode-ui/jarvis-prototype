@@ -24,6 +24,7 @@ import os
 import re
 import sys
 import threading
+import time
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -475,7 +476,6 @@ def handle_block_action(body: dict[str, Any]) -> None:
                        f"~~Action cancelled~~ `{pending_id}`",
                        blocks=[{"type": "section", "text": {"type": "mrkdwn",
                                "text": f"❌ *Cancelled* by <@{user_id}> · `{pending_id}`"}}])
-        post_message(channel_id, "❌ Cancelled.", thread_ts=thread_ts)
         return
 
     # ✅ Confirm — open to all users (internal channel, audit log tracks who confirmed)
@@ -490,6 +490,14 @@ def handle_block_action(body: dict[str, Any]) -> None:
                 thread_ts=thread_ts,
             )
             return
+
+        # Immediately fold buttons away — user gets instant feedback
+        update_message(
+            channel_id, pending["message_ts"],
+            f"⏳ Received — executing...",
+            blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                    "text": f"⏳ *Received* by <@{user_id}> · executing..."}}],
+        )
 
         # TOCTOU: re-snapshot before executing (skip for create_account — no meaningful before_state)
         if intent.get("action") != "create_account":
@@ -509,29 +517,36 @@ def handle_block_action(body: dict[str, Any]) -> None:
                 )
                 return
 
-        # Execute — wrap in try/except so a crash releases the claim
-        post_message(channel_id, "⚙️ Executing...", thread_ts=thread_ts)
+        t0 = time.time()
+
         try:
-            # Bulk grant: run in background thread, ack immediately
+            # Bulk grant: run in background thread, card already updated above
             if intent.get("action") == "bulk_grant":
                 t = threading.Thread(
                     target=_run_bulk_grant,
-                    args=(intent, pending_id, user_id, channel_id, thread_ts, pending["message_ts"]),
+                    args=(intent, pending_id, user_id, channel_id, thread_ts, pending["message_ts"], t0),
                     daemon=True,
                 )
                 t.start()
-                return  # ack already sent above; results come async
+                return  # results posted async by _run_bulk_grant
 
             after_state = _execute_intent(intent)
         except Exception as exec_err:
             print(f"[EXEC ERROR] {pending_id}: {exec_err}")
             reset_to_pending(pending_id, json.dumps(before_state))
+            update_message(
+                channel_id, pending["message_ts"],
+                f"❌ Execution failed — action reset",
+                blocks=build_confirmation_card(intent, before_state, pending_id),
+            )
             post_message(
                 channel_id,
                 f"❌ Execution failed: `{exec_err}`. Action reset — click ✅ to retry.",
                 thread_ts=thread_ts,
             )
             return
+
+        elapsed = round(time.time() - t0, 1)
 
         # Write audit BEFORE ack (SOC2 ordering)
         audit_id = write_audit(
@@ -546,17 +561,17 @@ def handle_block_action(body: dict[str, Any]) -> None:
         )
         mark_executed(pending_id)
 
-        # Update card to show completed state
+        # Update card to show completed state with elapsed time
         update_message(channel_id, pending["message_ts"],
                        f"✅ Completed `{pending_id}`",
                        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                               "text": f"✅ *Confirmed & executed* by <@{user_id}> · `{pending_id}`"}}])
+                               "text": f"✅ *Confirmed & executed* by <@{user_id}> · {elapsed}s · `{pending_id}`"}}])
 
         # Ack card — BUG-6: sanitized, no raw blobs
         blocks = build_audit_ack_card(audit_id, intent.get("action", ""), target_email, after_state)
         post_message(
             channel_id,
-            f"✅ Done. Audit: `{audit_id}`",
+            f"✅ Done in {elapsed}s · Audit: `{audit_id}`",
             thread_ts=thread_ts,
             blocks=blocks,
         )
@@ -613,6 +628,7 @@ def _run_bulk_grant(
     channel_id: str,
     thread_ts: str,
     card_ts: str,
+    t0: float,
 ) -> None:
     """Execute bulk_grant in a background thread. Posts progress + summary when done."""
     import uuid as _uuid
@@ -659,14 +675,16 @@ def _run_bulk_grant(
     # Mark pending as executed
     mark_executed(pending_id)
 
+    elapsed = round(time.time() - t0, 1)
+
     # Update card
     update_message(
         channel_id, card_ts,
         f"✅ Bulk grant complete — `{batch_id}`",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"✅ *Bulk grant done* · `{batch_id}` · by <@{actor_slack_id}>"}}],
+                 "text": f"✅ *Bulk grant done* · {elapsed}s · `{batch_id}` · by <@{actor_slack_id}>"}},
+        ],
     )
-
     # Summary in thread
     lines = [f"✅ *Bulk grant complete* — Batch `{batch_id}`"]
     lines.append(f"  ✓ *{len(success)}* succeeded")
