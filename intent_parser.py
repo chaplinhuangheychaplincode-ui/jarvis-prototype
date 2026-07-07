@@ -44,7 +44,7 @@ INTENT_TOOL = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["quota_grant", "create_account", "lookup", "ent_sub_grant", "bulk_grant", "explain", "revoke_grant", "unknown"],
+                "enum": ["quota_grant", "create_account", "lookup", "ent_sub_grant", "bulk_grant", "explain", "revoke_grant", "reduce_grant", "unknown"],
                 "description": "The action to perform",
             },
             "target_email": {
@@ -160,7 +160,13 @@ Revoke: if the user wants to cancel, undo, revoke, or remove a grant set action=
 - If they mention a quota_id, set quota_id and revoke_type="quota".
 - If they say "cancel sub" or "remove subscription", set revoke_type="subscription".
 - If no quota_id given and they say "cancel everything" or "revoke all", set revoke_type="both".
-- target_email is always required for revoke_grant."""
+- target_email is always required for revoke_grant.
+
+Reduce grant: if the user wants to reduce, decrease, lower, or subtract a specific number of credits from an existing grant, set action="reduce_grant".
+- Always requires quota_id (which specific grant to reduce) and credits (how many to deduct).
+- If quota_id is missing, set needs_clarification=true asking for the quota_id.
+- If credits (amount to deduct) is missing, set needs_clarification=true asking for the amount.
+- target_email is always required."""
 
 
 def parse_intent(
@@ -258,6 +264,23 @@ def _validate_intent(intent: dict[str, Any], utterance: str) -> dict[str, Any]:
                 "Example: *creator tier, 500 credits, 90 days*."
             )
             intent["confidence"] = 0.4
+
+    if intent.get("action") == "reduce_grant":
+        if not intent.get("quota_id") and not intent.get("needs_clarification"):
+            intent["needs_clarification"] = True
+            intent["clarifying_question"] = (
+                "Which quota grant should I reduce? Please provide the `quota_id` "
+                "(visible in the audit ack card when the grant was made)."
+            )
+            intent["confidence"] = 0.3
+        elif not intent.get("credits") and not intent.get("needs_clarification"):
+            intent["needs_clarification"] = True
+            intent["clarifying_question"] = "How many credits should I deduct from that grant?"
+            intent["confidence"] = 0.3
+        elif not intent.get("target_email") and not intent.get("needs_clarification"):
+            intent["needs_clarification"] = True
+            intent["clarifying_question"] = "What email address is this grant for?"
+            intent["confidence"] = 0.3
 
     return intent
 

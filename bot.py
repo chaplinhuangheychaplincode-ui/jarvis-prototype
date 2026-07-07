@@ -321,7 +321,7 @@ def _process_utterance(
         return
 
     # Guard: validate user exists for ops that require it
-    if action in ("lookup", "quota_grant", "revoke_grant"):
+    if action in ("lookup", "quota_grant", "revoke_grant", "reduce_grant"):
         before_state = heygen.get_user_state(target_email)
         if before_state.get("user_id") is None:
             err = before_state.get("error", {})
@@ -591,7 +591,7 @@ def handle_block_action(body: dict[str, Any]) -> None:
         # Ack card — pass before_state for before/after diff on write ops
         # Re-fetch after-state quotas for accurate diff (quota_grant returns grant result, not full state)
         ack_after = after_state
-        if intent.get("action") in ("quota_grant", "revoke_grant") and target_email:
+        if intent.get("action") in ("quota_grant", "revoke_grant", "reduce_grant") and target_email:
             try:
                 ack_after = heygen.get_user_state(target_email)
             except Exception:
@@ -650,6 +650,16 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
         elif revoke_type == "quota" and not quota_id:
             results["error"] = "quota_id required for quota revoke"
         return results
+    elif action == "reduce_grant":
+        quota_id = intent.get("quota_id")
+        credits = intent.get("credits")
+        if not quota_id:
+            return {"email": email, "action": "reduce_grant", "error": "quota_id required"}
+        if not credits:
+            return {"email": email, "action": "reduce_grant", "error": "credits (amount to deduct) required"}
+        result = heygen.execute_quota_deduct(quota_id=quota_id, amount=credits)
+        result["email"] = email
+        return result
     else:
         return {"action": action, "status": "not_implemented"}
 

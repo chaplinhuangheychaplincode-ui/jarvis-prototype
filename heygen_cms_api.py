@@ -332,6 +332,17 @@ def execute_quota_expire(quota_id: str) -> dict[str, Any]:
     }
 
 
+def execute_quota_deduct(quota_id: str, amount: int) -> dict[str, Any]:
+    """Deduct (reduce) a specific quota grant by amount."""
+    resp = _post("/v1/internal/movio/gift_quota.deduct", {"quota_id": quota_id, "amount": amount})
+    return {
+        "quota_id": quota_id,
+        "amount_deducted": amount,
+        "deducted": resp.get("code") == 100,
+        "response": resp,
+    }
+
+
 def execute_create_account(email: str, tier: str | None = None, duration_days: int | None = None) -> dict[str, Any]:
     """
     Create a new HeyGen account, then optionally comp a subscription.

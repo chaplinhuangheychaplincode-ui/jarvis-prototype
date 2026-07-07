@@ -349,7 +349,7 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
         })
 
     # Before / After quota diff for grant and revoke operations
-    if action in ("quota_grant", "revoke_grant") and before_state:
+    if action in ("quota_grant", "revoke_grant", "reduce_grant") and before_state:
         diff_lines: list[str] = []
         before_quotas = before_state.get("quotas", {}) or {}
         after_quotas = after_state.get("quotas", {}) if after_state.get("quotas") else {}
@@ -409,9 +409,12 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
         fields.append({"type": "mrkdwn", "text": f"*Created:*\n`{after.get('created', False)}`"})
         if after.get("tier"):
             fields.append({"type": "mrkdwn", "text": f"*Tier:*\n`{after['tier']}`"})
+    elif action == "reduce_grant":
+        fields.append({"type": "mrkdwn", "text": f"*Quota ID:*\n`{after.get('quota_id', '?')}`"})
+        fields.append({"type": "mrkdwn", "text": f"*Amount deducted:*\n`{after.get('amount_deducted', '?'):,}`"})
+        fields.append({"type": "mrkdwn", "text": f"*Success:*\n`{after.get('deducted', False)}`"})
     elif action == "revoke_grant":
         revoke_type = after.get("revoke_type", "subscription")
-        fields.append({"type": "mrkdwn", "text": f"*Revoke type:*\n`{revoke_type}`"})
         sub_result = after.get("subscription_result", {})
         if sub_result:
             ok = sub_result.get("removed", False)
@@ -500,6 +503,12 @@ def _format_request_body(intent: dict[str, Any]) -> str:
                   "total": credits, "expired_days": days}
         return f"POST /v1/internal/movio/gift_quota.add × {n}\n{json.dumps(sample, indent=2)}"
 
+    elif action == "reduce_grant":
+        quota_id = intent.get("quota_id", "?")
+        credits = intent.get("credits", "?")
+        body = {"quota_id": quota_id, "amount": credits}
+        return f"POST /v1/internal/movio/gift_quota.deduct\n{json.dumps(body, indent=2)}"
+
     return ""
 
 
@@ -535,6 +544,11 @@ def _format_action_summary(intent: dict[str, Any], before: dict[str, Any]) -> st
         quota_id = intent.get("quota_id")
         detail = f" · quota_id `{quota_id}`" if quota_id else ""
         return f"*Revoke Grant* for `{target}` · type: *{revoke_type}*{detail}"
+
+    elif action == "reduce_grant":
+        quota_id = intent.get("quota_id", "?")
+        credits = intent.get("credits", "?")
+        return f"*Reduce Grant* for `{target}` · deduct *{credits:,}* from quota `{quota_id}`" if isinstance(credits, int) else f"*Reduce Grant* for `{target}` · deduct *{credits}* from quota `{quota_id}`"
 
     elif action == "ent_sub_grant":
         ae = intent.get("ae_attribution", "?")
