@@ -299,15 +299,20 @@ def _execute_credit_top_up(
         return {"email": email, "error": resp, "granted": False, "action": "credit_top_up"}
 
     data = resp.get("data", {})
+    actual_granted = data.get("total")
+    capped = actual_granted is not None and credits and actual_granted < credits
     return {
         "email": email,
         "granted": True,
         "action": "credit_top_up",
         "feature": feature,
         "quota_id": data.get("quota_id"),
-        "total_after": data.get("total"),
+        "credits_requested": credits,
+        "credits_granted": actual_granted,
+        "total_after": actual_granted,
         "remaining_after": data.get("remaining"),
         "expires": data.get("expires"),
+        "capped": capped,
         "warning": data.get("message", ""),
     }
 

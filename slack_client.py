@@ -391,7 +391,14 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
     if action in ("quota_grant", "subscription_grant", "credit_top_up"):
         if after.get("tier"):
             fields.append({"type": "mrkdwn", "text": f"*Tier:*\n`{after['tier']}`"})
-        if after.get("credits_granted"):
+        req = after.get("credits_requested")
+        granted = after.get("credits_granted") if after.get("credits_granted") is not None else after.get("credits_granted")
+        if after.get("capped") and req and granted is not None:
+            fields.append({"type": "mrkdwn", "text": f"*Credits requested:*\n`{req:,}`"})
+            fields.append({"type": "mrkdwn", "text": f"*Credits actually granted:*\n⚠️ `{granted:,}` _(capped by CMS 90-day limit)_"})
+        elif granted is not None:
+            fields.append({"type": "mrkdwn", "text": f"*Credits granted:*\n`{granted:,}`"})
+        elif after.get("credits_granted"):
             fields.append({"type": "mrkdwn", "text": f"*Credits granted:*\n`{after['credits_granted']:,}`"})
         if after.get("duration_days"):
             fields.append({"type": "mrkdwn", "text": f"*Duration:*\n`{after['duration_days']}d`"})
