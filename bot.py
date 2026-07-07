@@ -193,6 +193,58 @@ def _clean_slack_text(text: str) -> str:
     return text.strip()
 
 
+def handle_explain(channel: str, thread_ts: str) -> None:
+    """Post a formatted capability menu from capabilities.json."""
+    import json as _json
+    cap_path = os.path.join(os.path.dirname(__file__), "capabilities.json")
+    try:
+        with open(cap_path) as f:
+            data = _json.load(f)
+    except Exception as e:
+        post_message(channel, f"❌ Could not load capabilities: `{e}`", thread_ts=thread_ts)
+        return
+
+    ops = data.get("ops", [])
+    coming_soon = data.get("coming_soon", [])
+
+    blocks: list[dict] = [
+        {"type": "header", "text": {"type": "plain_text", "text": "🤖 What Jarvis Can Do"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "Just @mention me in natural language — I'll ask if I need more info, then show a confirm card before touching anything."}},
+        {"type": "divider"},
+    ]
+
+    for op in ops:
+        emoji = op.get("emoji", "•")
+        name = op.get("name", "")
+        desc = op.get("description", "")
+        example = op.get("example", "")
+        write = op.get("write", False)
+        tag = " _(write op — requires confirmation)_" if write else " _(read-only)_"
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{emoji} {name}*{tag}\n{desc}\n> _{example}_",
+            },
+        })
+
+    if coming_soon:
+        blocks.append({"type": "divider"})
+        cs_lines = "\n".join(f"• *{op['name']}* — {op['description']}" for op in coming_soon)
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*🚧 Coming Soon*\n{cs_lines}"},
+        })
+
+    blocks.append({"type": "divider"})
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": f"_Capabilities last updated: {data.get('version', '?')}_"},
+    })
+
+    post_message(channel, "Here's what I can help with:", thread_ts=thread_ts, blocks=blocks)
+
+
 def _process_utterance(
     channel: str,
     thread_ts: str,
@@ -215,6 +267,12 @@ def _process_utterance(
     # Pass full history to parser
     intent = parse_intent(clean_text, history=history[:-1] if len(history) > 1 else None)
     print(f"[INTENT] {json.dumps(intent, indent=2)}")
+
+    # Explain / help — instant bypass, no confirm needed
+    if intent.get("action") == "explain":
+        conv_set_state(thread_ts, "DONE")
+        handle_explain(channel, thread_ts)
+        return
 
     # Clarification needed
     if intent.get("needs_clarification") or intent.get("confidence", 0) < CONFIDENCE_THRESHOLD:

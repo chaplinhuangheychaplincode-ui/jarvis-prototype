@@ -44,7 +44,7 @@ INTENT_TOOL = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["quota_grant", "create_account", "lookup", "ent_sub_grant", "bulk_grant", "unknown"],
+                "enum": ["quota_grant", "create_account", "lookup", "ent_sub_grant", "bulk_grant", "explain", "unknown"],
                 "description": "The action to perform",
             },
             "target_email": {
@@ -119,7 +119,11 @@ Legal combinations:
   If the description says "these users" with no list inline, set needs_clarification=true asking for the list.
 
 Raw CLI mode: if utterance starts with "!raw ", set action="unknown" and needs_clarification=false
-(this bypasses the LLM path in production)."""
+(this bypasses the LLM path in production).
+
+Help/onboarding: if the user asks what you can do, what commands exist, or how to use you,
+set action="explain" and needs_clarification=false. Examples: "what can you do",
+"help", "show me commands", "how do I use this", "what are your capabilities"."""
 
 
 def parse_intent(

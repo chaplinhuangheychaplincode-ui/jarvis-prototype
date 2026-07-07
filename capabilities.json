@@ -1,0 +1,44 @@
+{
+  "version": "2026-07-07",
+  "description": "Jarvis capability manifest — only ops Jarvis can fully execute end-to-end today.",
+  "ops": [
+    {
+      "name": "lookup",
+      "emoji": "🔍",
+      "description": "Look up a user's current tier, credits, quota, and account status",
+      "example": "who is user@example.com",
+      "cms_endpoints": ["/v1/internal/movio/user.get"],
+      "write": false
+    },
+    {
+      "name": "quota_grant",
+      "emoji": "🎁",
+      "description": "Grant generative credits or change a user's subscription tier",
+      "example": "give user@example.com 500 credits on creator tier for 90 days",
+      "cms_endpoints": ["/v1/internal/movio/gift_subscription.add"],
+      "write": true
+    },
+    {
+      "name": "create_account",
+      "emoji": "🆕",
+      "description": "Create a new HeyGen account, optionally with a comped subscription",
+      "example": "create account for new@example.com on pro tier for 30 days",
+      "cms_endpoints": ["/v1/internal/create_account", "/v1/internal/movio/gift_subscription.add"],
+      "write": true
+    },
+    {
+      "name": "bulk_grant",
+      "emoji": "📦",
+      "description": "Grant credits or tier to a batch of up to 100 users at once",
+      "example": "bulk grant creator tier + 200 credits to: a@x.com, b@x.com, c@x.com",
+      "cms_endpoints": ["/v1/internal/movio/gift_subscription.add"],
+      "write": true
+    }
+  ],
+  "coming_soon": [
+    {
+      "name": "ent_sub_grant",
+      "description": "Enterprise subscription grant with AE attribution and multi-seat support"
+    }
+  ]
+}
