@@ -379,6 +379,17 @@ def execute_quota_deduct(email: str, product: str, amount: int) -> dict[str, Any
     }
 
 
+def get_space(space_id: str) -> dict[str, Any]:
+    """
+    Fetch space/team info by space_id via GET /v1/internal/space?space_id=...
+    Returns seat_limit, owner, members, AE email, trial_end_date, provision_source.
+    """
+    resp = _get(f"/v1/internal/space?space_id={space_id}")
+    if resp.get("code") != 100:
+        return {"space_id": space_id, "error": resp}
+    return resp.get("data", {"space_id": space_id})
+
+
 def execute_create_account(email: str, tier: str | None = None, duration_days: int | None = None) -> dict[str, Any]:
     """
     Create a new HeyGen account, then optionally comp a subscription.

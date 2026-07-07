@@ -44,7 +44,7 @@ INTENT_TOOL = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["quota_grant", "create_account", "lookup", "ent_sub_grant", "bulk_grant", "explain", "revoke_grant", "reduce_grant", "unknown"],
+                "enum": ["quota_grant", "create_account", "lookup", "ent_sub_grant", "bulk_grant", "explain", "revoke_grant", "reduce_grant", "investigate", "unknown"],
                 "description": "The action to perform",
             },
             "target_email": {
@@ -166,7 +166,13 @@ Reduce grant: if the user wants to reduce, decrease, lower, or subtract a specif
 - Requires target_email, credits (how many to deduct), and product (which credit type — default generative_credit).
 - No quota_id needed.
 - If credits (amount to deduct) is missing, set needs_clarification=true asking for the amount.
-- target_email is always required."""
+- target_email is always required.
+
+Investigate: if the user asks to investigate, diagnose, audit, troubleshoot, or "why can't they X" — anything requiring reasoning over account state rather than a direct action — set action="investigate".
+- Requires target_email.
+- Put the user's question or context in the `reason` field.
+- Examples: "why can't user X export?", "something's wrong with this account", "investigate X", "what's going on with Y", "audit X's credits".
+- Do NOT set investigate for a simple lookup — lookup is for read-only state fetch, investigate is for diagnosis + remediation."""
 
 
 def parse_intent(

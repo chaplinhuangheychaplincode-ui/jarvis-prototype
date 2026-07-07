@@ -36,15 +36,17 @@ from intent_parser import parse_intent
 from pending_store import (
     claim_pending, get_by_pending_id, mark_cancelled, mark_executed,
     reset_to_pending, write_pending, list_expired_pending, expire_by_id,
+    update_message_ts,
     EXPIRY_MINUTES,
 )
 from audit_log import write_audit, query_audit, audit_has_batch_row
 from slack_client import (
     post_message, update_message, get_user_info,
     build_confirmation_card, build_clarifying_question_card, build_audit_ack_card,
-    build_bulk_confirmation_card,
+    build_bulk_confirmation_card, build_investigation_card,
 )
 import heygen_cms_api as heygen
+from investigator import investigate as run_investigation
 from conversation_store import (
     upsert_conversation, append_message as conv_append, get_conversation,
     is_active as conv_is_active, set_state as conv_set_state,
@@ -273,6 +275,64 @@ def _process_utterance(
     if intent.get("action") == "explain":
         conv_set_state(thread_ts, "DONE")
         handle_explain(channel, thread_ts)
+        return
+
+    # ── INVESTIGATE — agentic read-only loop ─────────────────────────────────
+    if intent.get("action") == "investigate":
+        conv_set_state(thread_ts, "DONE")
+        target_email = intent.get("target_email", "")
+        question = intent.get("reason") or clean_text  # use original utterance as question
+
+        # Progress callback: posts live updates as thread replies
+        _progress_ts: list[str] = []
+        def _progress(msg: str) -> None:
+            if not _progress_ts:
+                resp = post_message(channel, msg, thread_ts=thread_ts)
+                _progress_ts.append(resp.get("ts", ""))
+            else:
+                update_message(channel, _progress_ts[0], msg)
+
+        result = run_investigation(
+            email=target_email,
+            question=question,
+            progress_cb=_progress,
+        )
+
+        # Pre-write one pending per proposed action so buttons work immediately
+        import uuid as _uuid
+        pending_ids: list[str] = []
+        for action_intent in result.proposed_actions:
+            pid = f"jrv_p_{_uuid.uuid4().hex[:8]}"
+            # Enrich intent with the investigated user's before_state
+            before = heygen.get_user_state(target_email) if target_email else {}
+            write_pending(
+                actor_slack_id=user_id,
+                intent=action_intent,
+                before_state=before,
+                channel_id=channel,
+                thread_ts=thread_ts,
+                message_ts="",       # will be updated when card is posted
+                pending_id=pid,
+            )
+            pending_ids.append(pid)
+
+        # Post investigation card
+        card_blocks = build_investigation_card(result, pending_ids)
+        # Delete the progress message first (clean up)
+        if _progress_ts:
+            update_message(channel, _progress_ts[0], "✅ Investigation complete — see below")
+        resp = post_message(
+            channel,
+            f"🔍 Investigation for `{target_email}`",
+            thread_ts=thread_ts,
+            blocks=card_blocks,
+        )
+        card_ts = resp.get("ts", "")
+
+        # Back-fill card_ts into the pending rows so TOCTOU re-snapshot works
+        for pid in pending_ids:
+            update_message_ts(pid, card_ts)
+
         return
 
     # Clarification needed

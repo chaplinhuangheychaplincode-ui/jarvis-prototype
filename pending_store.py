@@ -83,6 +83,17 @@ def mark_reaction_seen(dedup_key: str) -> None:
     conn.close()
 
 
+def update_message_ts(pending_id: str, message_ts: str) -> None:
+    """Back-fill message_ts on a pending row written before the card was posted."""
+    conn = _conn()
+    conn.execute(
+        "UPDATE pending_confirmations SET message_ts=? WHERE pending_id=?",
+        (message_ts, pending_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def write_pending(
     actor_slack_id: str,
     intent: dict[str, Any],

@@ -646,3 +646,119 @@ def _build_diff_blocks(intent: dict[str, Any], before: dict[str, Any]) -> list[d
                 "text": {"type": "mrkdwn", "text": f"*Request:*\n```{req}```"},
             })
     return result_blocks
+
+
+# ---------------------------------------------------------------------------
+# Investigation card — agentic investigation results + suggested action buttons
+# ---------------------------------------------------------------------------
+
+def build_investigation_card(
+    result: Any,   # InvestigationResult (avoid circular import)
+    pending_ids: list[str],
+) -> list[dict[str, Any]]:
+    """
+    Build a Block Kit card for an investigation result.
+
+    Each proposed action gets a ✅ button that maps to a pre-written pending_id.
+    The caller is responsible for writing those pendings to the store before
+    posting this card, so the button handler can find them immediately.
+
+    Args:
+        result: InvestigationResult instance from investigator.py
+        pending_ids: list of pending_ids, one per proposed_action (same order)
+    """
+    blocks: list[dict[str, Any]] = []
+
+    # Header
+    icon = "✅" if result.no_action_needed else "🔍"
+    blocks.append({
+        "type": "header",
+        "text": {"type": "plain_text", "text": f"{icon} Investigation Complete"},
+    })
+
+    # Summary
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": result.summary},
+    })
+
+    blocks.append({"type": "divider"})
+
+    # Findings
+    if result.findings:
+        finding_lines = "\n".join(f"• {f}" for f in result.findings)
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Findings:*\n{finding_lines}"},
+        })
+
+    # No action needed
+    if result.no_action_needed:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "✅ Account looks healthy — no action required."},
+        })
+        return blocks
+
+    # Proposed actions — each as its own section with a confirm button
+    if result.proposed_actions:
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "*Suggested Actions:*"},
+        })
+
+        for i, (action_intent, pending_id) in enumerate(
+            zip(result.proposed_actions, pending_ids)
+        ):
+            label = action_intent.get("label", f"Action {i + 1}")
+            action_type = action_intent.get("action", "")
+            email = action_intent.get("target_email", "")
+
+            # Build a one-line detail string from the intent fields
+            detail_parts = []
+            if action_intent.get("credits"):
+                detail_parts.append(f"{action_intent['credits']:,} {action_intent.get('product', 'credits')}")
+            if action_intent.get("duration_days"):
+                detail_parts.append(f"{action_intent['duration_days']}d")
+            if action_intent.get("tier"):
+                detail_parts.append(f"tier={action_intent['tier']}")
+            if action_intent.get("quota_id"):
+                detail_parts.append(f"quota_id={action_intent['quota_id']}")
+            detail_str = " · ".join(detail_parts)
+
+            description = f"`{action_type}` for `{email}`"
+            if detail_str:
+                description += f"\n  {detail_str}"
+            if action_intent.get("reason"):
+                description += f"\n  _{action_intent['reason']}_"
+
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*{i + 1}. {label}*\n{description}"},
+                "accessory": {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✅ Confirm"},
+                    "style": "primary",
+                    "action_id": "confirm_action",
+                    "value": pending_id,
+                },
+            })
+
+    # Footer: metadata
+    elapsed_s = result.elapsed_ms / 1000
+    blocks.append({"type": "divider"})
+    blocks.append({
+        "type": "context",
+        "elements": [{
+            "type": "mrkdwn",
+            "text": (
+                f"🤖 Agent used {result.tool_calls} tool call(s) · "
+                f"{elapsed_s:.1f}s · "
+                f"Actions above flow through normal HITL confirm"
+            ),
+        }],
+    })
+
+    return blocks
+
