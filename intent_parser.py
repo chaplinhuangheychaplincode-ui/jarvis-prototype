@@ -152,6 +152,12 @@ Lookup field extraction:
 Raw CLI mode: if utterance starts with "!raw ", set action="unknown" and needs_clarification=false
 (this bypasses the LLM path in production).
 
+Thread context: if you see a [Context] note at the start of the conversation with a
+"[Prior completed op: ...]" marker, use it to resolve references in the new utterance.
+The prior op is DONE — do not re-propose it. Use the email/tier/product from it to fill
+in fields the user omitted (e.g. "now look them up" → target_email from prior op).
+If the new utterance clearly refers to a different target, ignore the prior context.
+
 Help/onboarding: if the user asks what you can do, what commands exist, or how to use you,
 set action="explain" and needs_clarification=false. Examples: "what can you do",
 "help", "show me commands", "how do I use this", "what are your capabilities".
@@ -193,8 +199,17 @@ def parse_intent(
     messages: list[dict[str, Any]] = []
     if history:
         for msg in history:
-            role = "user" if msg.get("role") == "user" else "assistant"
-            messages.append({"role": role, "content": msg.get("text", "")})
+            role = msg.get("role", "user")
+            text = msg.get("text", "")
+            if role == "system":
+                # System/context markers — prepend as user context note
+                # (Anthropic API requires alternating user/assistant roles)
+                messages.append({"role": "user", "content": f"[Context] {text}"})
+                messages.append({"role": "assistant", "content": "Understood, I'll keep that context in mind."})
+            elif role == "user":
+                messages.append({"role": "user", "content": text})
+            else:
+                messages.append({"role": "assistant", "content": text})
     # Always end with the latest user message
     if not messages or messages[-1]["content"] != utterance:
         messages.append({"role": "user", "content": utterance})

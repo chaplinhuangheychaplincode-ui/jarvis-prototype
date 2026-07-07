@@ -457,7 +457,22 @@ def handle_mention(event: dict[str, Any]) -> None:
 
     # Ensure conversation exists for this thread — or reset if previous op is DONE
     if not conv_is_active(thread_ts):
-        upsert_conversation(thread_ts, channel, [], state="GATHERING")
+        # Carry forward a completed-op marker so the parser retains context
+        # (email, tier, product) without re-proposing the finished action.
+        prior = get_conversation(thread_ts)
+        seed_messages: list[dict[str, Any]] = []
+        if prior and prior.get("final_intent"):
+            fi = prior["final_intent"]
+            email   = fi.get("target_email", "")
+            action  = fi.get("action", "")
+            tier    = fi.get("tier", "")
+            product = fi.get("product", "")
+            parts = [f"action={action}", f"email={email}"]
+            if tier:    parts.append(f"tier={tier}")
+            if product: parts.append(f"product={product}")
+            marker = "[Prior completed op: " + ", ".join(parts) + "]"
+            seed_messages = [{"role": "system", "text": marker, "ts": ""}]
+        upsert_conversation(thread_ts, channel, seed_messages, state="GATHERING")
 
     _process_utterance(channel, thread_ts, user_id, clean_text)
 
