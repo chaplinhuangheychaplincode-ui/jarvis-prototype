@@ -549,17 +549,21 @@ def handle_block_action(body: dict[str, Any]) -> None:
 
         elapsed = round(time.time() - t0, 1)
 
-        # Write audit BEFORE ack (SOC2 ordering)
-        audit_id = write_audit(
-            actor_slack_id=user_id,
-            action=intent.get("action", "unknown"),
-            result="success",
-            intent=intent,
-            before_state=before_state,
-            after_state=after_state,
-            channel_id=channel_id,
-            message_ts=pending["message_ts"],
-        )
+        # Write audit BEFORE ack (SOC2 ordering) — CH failure must not crash the thread
+        try:
+            audit_id = write_audit(
+                actor_slack_id=user_id,
+                action=intent.get("action", "unknown"),
+                result="success",
+                intent=intent,
+                before_state=before_state,
+                after_state=after_state,
+                channel_id=channel_id,
+                message_ts=pending["message_ts"],
+            )
+        except Exception as audit_exc:
+            print(f"[audit_log] WARN: write_audit failed (non-fatal): {audit_exc}", flush=True)
+            audit_id = f"jrv_a_err_{__import__('uuid').uuid4().hex[:8]}"
         mark_executed(pending_id)
 
         # Update card to show completed state with elapsed time
@@ -664,16 +668,19 @@ def _run_bulk_grant(
                     err_msg = err_msg.get("message", str(err_msg))
                 failed.append((email, str(err_msg)))
                 continue
-            write_audit(
-                actor_slack_id=actor_slack_id,
-                action="bulk_grant",
-                result="success",
-                intent={**intent, "target_email": email},
-                after_state=after_state,
-                channel_id=channel_id,
-                message_ts=card_ts,
-                batch_id=batch_id,
-            )
+            try:
+                write_audit(
+                    actor_slack_id=actor_slack_id,
+                    action="bulk_grant",
+                    result="success",
+                    intent={**intent, "target_email": email},
+                    after_state=after_state,
+                    channel_id=channel_id,
+                    message_ts=card_ts,
+                    batch_id=batch_id,
+                )
+            except Exception as audit_exc:
+                print(f"[audit_log] WARN: write_audit failed (non-fatal): {audit_exc}", flush=True)
             success.append(email)
         except Exception as e:
             failed.append((email, str(e)))
