@@ -284,6 +284,14 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
         if quotas and isinstance(quotas, dict):
             def _fmt_quota(val: Any) -> str:
                 if isinstance(val, dict):
+                    # CMS returns {amount, quota_type} — single value, no total
+                    if "amount" in val and "remaining" not in val and "total" not in val:
+                        amount = val["amount"]
+                        exp = val.get("expire_at") or val.get("expired_at") or val.get("expires", "")
+                        s = str(amount)
+                        if exp:
+                            s += f" (exp {str(exp)[:10]})"
+                        return s
                     rem = val.get("remaining", val.get("remain", "?"))
                     tot = val.get("total", val.get("limit", "?"))
                     exp = val.get("expire_at") or val.get("expired_at") or val.get("expires", "")
