@@ -717,6 +717,8 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
             email=email,
             tier=intent.get("tier"),
             duration_days=intent.get("duration_days"),
+            credits=intent.get("credits"),
+            product=intent.get("product", "generative_credit"),
         )
     elif action == "revoke_grant":
         revoke_type = intent.get("revoke_type", "subscription")

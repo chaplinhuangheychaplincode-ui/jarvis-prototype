@@ -501,15 +501,18 @@ def _format_request_body(intent: dict[str, Any]) -> str:
         body: dict[str, Any] = {"email": email}
         tier = intent.get("tier")
         days = intent.get("duration_days", 30)
+        credits = intent.get("credits")
+        product = _normalize_product_client(intent.get("product"))
         lines = [f"POST /v1/internal/create_account\n{json.dumps(body, indent=2)}"]
         if tier and tier.lower() in _VALID_TIERS_CLIENT:
+            quotas = {product: credits} if credits else {}
             # All fields per AddGiftSubscriptionRequest
             sub_body = {
                 "email": email,
                 "tier": tier.lower(),     # required
-                "day": days,              # default=30 (was: wrong field "expired_days")
-                "quotas": {},             # default={}
-                "trial": True,           # default=True
+                "day": days,              # default=30
+                "quotas": quotas,         # credits bundled here
+                "trial": True,            # default=True
             }
             lines.append(f"\nPOST /v1/internal/movio/gift_subscription.add\n{json.dumps(sub_body, indent=2)}")
         return "\n".join(lines)

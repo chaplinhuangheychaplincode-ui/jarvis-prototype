@@ -108,7 +108,13 @@ def _post(path: str, data: dict[str, Any]) -> dict[str, Any]:
         print(f"[CMS] HTTP {e.code} on POST {url}", flush=True)
         body = e.read()
         try:
-            return json.loads(body)
+            parsed = json.loads(body)
+            # FastAPI 422 returns {"detail": [...]} — normalise to a dict
+            if isinstance(parsed, list):
+                return {"code": e.code, "message": str(parsed[:2])}
+            if isinstance(parsed, dict) and "detail" in parsed and not "code" in parsed:
+                return {"code": e.code, "message": str(parsed["detail"])[:300]}
+            return parsed
         except Exception:
             return {"code": e.code, "message": body.decode()[:300]}
     except urllib.error.URLError as e:
@@ -390,11 +396,17 @@ def get_space(space_id: str) -> dict[str, Any]:
     return resp.get("data", {"space_id": space_id})
 
 
-def execute_create_account(email: str, tier: str | None = None, duration_days: int | None = None) -> dict[str, Any]:
+def execute_create_account(
+    email: str,
+    tier: str | None = None,
+    duration_days: int | None = None,
+    credits: int | None = None,
+    product: str = "generative_credit",
+) -> dict[str, Any]:
     """
-    Create a new HeyGen account, then optionally comp a subscription.
+    Create a new HeyGen account, then optionally comp a subscription + credits.
     Step 1: create_account → gets credentials
-    Step 2: if tier != free, gift_subscription.add
+    Step 2: if tier != free, gift_subscription.add (with credits bundled in quotas if provided)
     """
     # Step 1: create the account
     resp = _post("/v1/internal/create_account", {"email": email})
@@ -417,16 +429,23 @@ def execute_create_account(email: str, tier: str | None = None, duration_days: i
         "subscription_days_remaining": duration_days,
     }
 
-    # Step 2: if non-free tier, comp the subscription
+    # Step 2: if non-free tier, comp the subscription (with credits bundled)
     if tier and tier.lower() in VALID_TIERS and tier.lower() != "free":
+        day = duration_days or 30   # default 30 days — never pass null
+        quotas: dict[str, int] = {}
+        if credits:
+            quotas[_normalize_feature(product)] = credits
         sub_resp = _post("/v1/internal/movio/gift_subscription.add", {
             "email": email,
             "tier": tier.lower(),
-            "day": duration_days,           # AddGiftSubscriptionRequest.day, NOT "expired_days"
-            "quotas": {},
+            "day": day,
+            "quotas": quotas,
             "trial": True,
         })
         result["subscription_granted"] = sub_resp.get("code") == 100
         result["subscription_response"] = sub_resp.get("data", {})
+        if credits:
+            result["credits_granted"] = credits
+            result["credits_feature"] = _normalize_feature(product)
 
     return result
