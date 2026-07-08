@@ -841,6 +841,8 @@ def build_execution_complete_card(completed: list, audit_ids: list, actor_slack_
         if sr.step.get("pre_confirm"):
             continue
         result = sr.result or {}
+        action = sr.step.get("action", "")
+        email = sr.step.get("target_email", "")
         if result.get("skipped") and result.get("warning"):
             # Skipped step with a warning — show as warning row, not success
             blocks.append({"type": "section",
@@ -849,6 +851,12 @@ def build_execution_complete_card(completed: list, audit_ids: list, actor_slack_
         else:
             blocks.append({"type": "section",
                 "text": {"type": "mrkdwn", "text": f"✅ Step {sr.step_num}: {_fmt_step(sr.step)} _{sr.elapsed_ms}ms_"}})
+            # Show structured result fields (password, space_id, credits granted, etc.)
+            fields = _format_ack_fields(action, email, result)
+            if fields:
+                # Slack limits fields to 10 per section block
+                for i in range(0, len(fields), 10):
+                    blocks.append({"type": "section", "fields": fields[i:i+10]})
     blocks.append({"type": "divider"})
     audit_str = " · ".join(f"`{a}`" for a in audit_ids if not a.startswith("err_"))
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
