@@ -380,6 +380,10 @@ def _process_utterance(
     pending_id = f"jrv_p_{_uuid.uuid4().hex[:8]}"
     if thinking_ts:
         delete_message(channel, thinking_ts)
+    # Delete stale plan card if one already exists (prevents orphaned buttons)
+    existing_card_ts = conv.get("plan_card_ts") if conv else None
+    if existing_card_ts:
+        delete_message(channel, existing_card_ts)
     resp = post_message(
         channel,
         f"📋 Here's my plan — review and confirm:",
@@ -446,6 +450,10 @@ def _handle_planning_reply(
             pending_id = f"jrv_p_{_uuid.uuid4().hex[:8]}"
             if thinking_ts:
                 delete_message(channel, thinking_ts)
+            # Delete old plan card before posting the new one
+            old_card_ts = conv.get("plan_card_ts")
+            if old_card_ts:
+                delete_message(channel, old_card_ts)
             resp = post_message(
                 channel, "📋 Updated plan — review and confirm:",
                 thread_ts=thread_ts,
