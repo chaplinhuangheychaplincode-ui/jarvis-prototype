@@ -62,6 +62,11 @@ def update_message(channel: str, ts: str, text: str, blocks: list | None = None)
     return _call("chat.update", payload)
 
 
+def delete_message(channel: str, ts: str) -> dict[str, Any]:
+    """Delete a message (e.g. the ⏳ Thinking... placeholder) cleanly."""
+    return _call("chat.delete", {"channel": channel, "ts": ts})
+
+
 def get_user_info(user_id: str) -> dict[str, Any]:
     token = _bot_token()
     url = f"https://slack.com/api/users.info?user={user_id}"

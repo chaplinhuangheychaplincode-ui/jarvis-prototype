@@ -41,7 +41,7 @@ from pending_store import (
 )
 from audit_log import write_audit, query_audit, audit_has_batch_row
 from slack_client import (
-    post_message, update_message, get_user_info,
+    post_message, update_message, delete_message, get_user_info,
     build_confirmation_card, build_clarifying_question_card, build_audit_ack_card,
     build_bulk_confirmation_card, build_investigation_card,
     build_plan_card, build_execution_complete_card, build_execution_failure_card,
@@ -279,7 +279,7 @@ def _process_utterance(
     steps = plan.get("steps", [])
     if steps and steps[0].get("action") == "explain":
         if thinking_ts:
-            update_message(channel, thinking_ts, "_ _")
+            delete_message(channel, thinking_ts)
         conv_set_state(thread_ts, "DONE")
         handle_explain(channel, thread_ts)
         return
@@ -324,7 +324,7 @@ def _process_utterance(
         if updated_conv:
             upsert_conversation(thread_ts, channel, updated_conv["messages"], state="GATHERING")
         if thinking_ts:
-            update_message(channel, thinking_ts, "_ _")
+            delete_message(channel, thinking_ts)
         blocks = build_clarifying_question_card(question)
         post_message(channel, question, thread_ts=thread_ts, blocks=blocks)
         return
@@ -342,7 +342,7 @@ def _process_utterance(
                 before_states[email] = state
                 if state.get("user_id") is None:
                     if thinking_ts:
-                        update_message(channel, thinking_ts, "_ _")
+                        delete_message(channel, thinking_ts)
                     post_message(channel,
                                  f"❌ User `{email}` not found in HeyGen. Check the email and try again.",
                                  thread_ts=thread_ts)
@@ -354,7 +354,7 @@ def _process_utterance(
     # Transition to PLANNING — store plan, post plan card
     pending_id = f"jrv_p_{_uuid.uuid4().hex[:8]}"
     if thinking_ts:
-        update_message(channel, thinking_ts, "_ _")
+        delete_message(channel, thinking_ts)
     resp = post_message(
         channel,
         f"📋 Here's my plan — review and confirm:",
@@ -409,7 +409,7 @@ def _handle_planning_reply(
         answer = refine_result.get("answer", "I'm not sure — could you rephrase?")
         conv_append(thread_ts, channel, "assistant", answer)
         if thinking_ts:
-            update_message(channel, thinking_ts, "_ _")
+            delete_message(channel, thinking_ts)
         post_message(channel, answer, thread_ts=thread_ts)
         # Plan unchanged, stay PLANNING
 
@@ -420,7 +420,7 @@ def _handle_planning_reply(
             import uuid as _uuid
             pending_id = f"jrv_p_{_uuid.uuid4().hex[:8]}"
             if thinking_ts:
-                update_message(channel, thinking_ts, "_ _")
+                delete_message(channel, thinking_ts)
             resp = post_message(
                 channel, "📋 Updated plan — review and confirm:",
                 thread_ts=thread_ts,
@@ -442,14 +442,14 @@ def _handle_planning_reply(
                          thread_ts=thread_ts)
         else:
             if thinking_ts:
-                update_message(channel, thinking_ts, "_ _")
+                delete_message(channel, thinking_ts)
             post_message(channel, "⚠️ Could not update plan — please try again.", thread_ts=thread_ts)
 
     else:  # clarify
         question = refine_result.get("clarifying_question", "Could you clarify that?")
         conv_append(thread_ts, channel, "assistant", question)
         if thinking_ts:
-            update_message(channel, thinking_ts, "_ _")
+            delete_message(channel, thinking_ts)
         post_message(channel, question, thread_ts=thread_ts)
 
 
