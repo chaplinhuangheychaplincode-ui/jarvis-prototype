@@ -274,7 +274,10 @@ def _process_utterance(
     # Question intent short-circuit — answer inline without building a workflow plan
     # Works in GATHERING and also catches questions on new @mentions in DONE threads
     if is_question_intent(clean_text):
-        history_for_qa = conv["messages"][:-1] if conv and len(conv.get("messages", [])) > 1 else None
+        # Include seed messages (system context / prior op marker) in history for QA
+        all_messages = conv["messages"] if conv else []
+        # history_for_qa = everything before the current user utterance (last element)
+        history_for_qa = all_messages[:-1] if len(all_messages) > 1 else (all_messages[:] if all_messages else None)
         current_plan = conv.get("current_plan") if conv else None
         answer = answer_question(clean_text, history=history_for_qa, current_plan=current_plan)
         conv_append(thread_ts, channel, "assistant", answer)
@@ -514,17 +517,39 @@ def handle_mention(event: dict[str, Any]) -> None:
         # (email, tier, product) without re-proposing the finished action.
         prior = get_conversation(thread_ts)
         seed_messages: list[dict[str, Any]] = []
-        if prior and prior.get("final_intent"):
-            fi = prior["final_intent"]
-            email   = fi.get("target_email", "")
-            action  = fi.get("action", "")
-            tier    = fi.get("tier", "")
-            product = fi.get("product", "")
-            parts = [f"action={action}", f"email={email}"]
-            if tier:    parts.append(f"tier={tier}")
-            if product: parts.append(f"product={product}")
-            marker = "[Prior completed op: " + ", ".join(parts) + "]"
-            seed_messages = [{"role": "system", "text": marker, "ts": ""}]
+        if prior:
+            fi = prior.get("final_intent")
+            fp = prior.get("final_plan")  # new workflow path stores here
+            # Prefer final_plan (richer); fall back to final_intent (legacy)
+            if fp and fp.get("steps"):
+                # Extract unique emails and actions from all completed steps
+                emails = list(dict.fromkeys(
+                    s.get("target_email", "") for s in fp["steps"] if s.get("target_email")
+                ))
+                actions = list(dict.fromkeys(
+                    s.get("action", "") for s in fp["steps"] if s.get("action")
+                ))
+                parts: list[str] = []
+                if actions: parts.append(f"actions={','.join(actions)}")
+                if emails:  parts.append(f"email={emails[0]}")
+                # Carry extra context fields from last step
+                last = fp["steps"][-1]
+                if last.get("tier"):    parts.append(f"tier={last['tier']}")
+                if last.get("product"): parts.append(f"product={last['product']}")
+                if last.get("amount"):  parts.append(f"amount={last['amount']}")
+                if last.get("duration_days"): parts.append(f"duration_days={last['duration_days']}")
+                marker = "[Prior completed op: " + ", ".join(parts) + "]"
+                seed_messages = [{"role": "system", "text": marker, "ts": ""}]
+            elif fi:
+                email   = fi.get("target_email", "")
+                action  = fi.get("action", "")
+                tier    = fi.get("tier", "")
+                product = fi.get("product", "")
+                parts = [f"action={action}", f"email={email}"]
+                if tier:    parts.append(f"tier={tier}")
+                if product: parts.append(f"product={product}")
+                marker = "[Prior completed op: " + ", ".join(parts) + "]"
+                seed_messages = [{"role": "system", "text": marker, "ts": ""}]
         upsert_conversation(thread_ts, channel, seed_messages, state="GATHERING")
 
     _process_utterance(channel, thread_ts, user_id, clean_text)

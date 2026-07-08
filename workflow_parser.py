@@ -267,9 +267,20 @@ def is_question_intent(utterance: str) -> bool:
     """
     Quick heuristic: is this utterance a question rather than an action request?
     Used to short-circuit parse_workflow and route to answer_question instead.
+    Strips informal lead-ins (yeah, so, ok, etc.) before checking.
     """
+    import re as _re
     text = utterance.strip().lower()
     # Ends with question mark
+    if text.endswith("?"):
+        return True
+    # Strip informal lead-ins before checking for question starters
+    informal_prefix = _re.compile(
+        r"^(yeah|yep|yea|so|ok|okay|right|actually|hmm|hm|um|uh|hey|"
+        r"btw|by the way|wait|also|and|oh|ah)[,\s]+"
+    )
+    text = informal_prefix.sub("", text).strip()
+    # Ends with question mark after stripping
     if text.endswith("?"):
         return True
     # Starts with a question word
@@ -279,6 +290,7 @@ def is_question_intent(utterance: str) -> bool:
         "can ", "could ", "is ", "are ", "does ", "do ",
         "will ", "would ", "should ", "shall ",
         "is it ", "can i ", "can we ",
+        "tell me ", "explain ",
     )
     return any(text.startswith(s) for s in question_starters)
 
