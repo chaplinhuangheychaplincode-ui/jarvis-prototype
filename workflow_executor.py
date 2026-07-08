@@ -91,7 +91,8 @@ def execute_workflow(
         step_num = step.get("step", "?")
 
         if progress_cb:
-            progress_cb(f"⏳ Step {step_num}: `{action}` for `{email}`...")
+            display_email = email.replace("@", "\u200b@")  # zero-width space prevents Slack auto-linking
+            progress_cb(f"⏳ Step {step_num}: `{action}` for `{display_email}`...")
 
         # Fetch before_state for diff (skip for pre_confirm get_info)
         if email and action not in ("get_info", "lookup") and email not in before_states:

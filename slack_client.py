@@ -42,6 +42,11 @@ def _call(method: str, payload: dict[str, Any]) -> dict[str, Any]:
     return resp
 
 
+def _slack_email(email: str) -> str:
+    """Prevent Slack from auto-linking email addresses by inserting a zero-width space."""
+    return email.replace("@", "\u200b@")
+
+
 def post_message(channel: str, text: str, thread_ts: str | None = None,
                  blocks: list | None = None) -> dict[str, Any]:
     # prefix removed — bot identity is clear from the app name
@@ -415,7 +420,7 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
             fields.append({"type": "mrkdwn", "text": f"*Quota ID:*\n`{after['quota_id']}`"})
     elif action == "create_account":
         if after.get("email"):
-            fields.append({"type": "mrkdwn", "text": f"*Email:*\n`{after['email']}`"})
+            fields.append({"type": "mrkdwn", "text": f"*Email:*\n`{_slack_email(after['email'])}`"})
         if after.get("space_id"):
             fields.append({"type": "mrkdwn", "text": f"*Space ID:*\n`{after['space_id']}`"})
         if after.get("password"):
@@ -784,7 +789,7 @@ def _fmt_step(step: dict) -> str:
     pre = " _(auto, read-only)_" if step.get("pre_confirm") else ""
     parts = [f"`{action}`"]
     if email:
-        parts.append(f"`{email}`")
+        parts.append(f"`{_slack_email(email)}`")
     if step.get("tier"):
         parts.append(f"tier=`{step['tier']}`")
     if step.get("credits"):
