@@ -48,7 +48,7 @@ from slack_client import (
 )
 import heygen_cms_api as heygen
 from investigator import investigate as run_investigation
-from workflow_parser import parse_workflow, refine_workflow
+from workflow_parser import parse_workflow, refine_workflow, answer_question, is_question_intent
 from workflow_executor import execute_workflow
 from conversation_store import (
     upsert_conversation, append_message as conv_append, get_conversation,
@@ -271,6 +271,19 @@ def _process_utterance(
     thinking_resp = post_message(channel, "⏳ Thinking...", thread_ts=thread_ts)
     thinking_ts = thinking_resp.get("ts", "")
 
+    # Question intent short-circuit — answer inline without building a workflow plan
+    # Works in GATHERING and also catches questions on new @mentions in DONE threads
+    if is_question_intent(clean_text):
+        history_for_qa = conv["messages"][:-1] if conv and len(conv.get("messages", [])) > 1 else None
+        current_plan = conv.get("current_plan") if conv else None
+        answer = answer_question(clean_text, history=history_for_qa, current_plan=current_plan)
+        conv_append(thread_ts, channel, "assistant", answer)
+        if thinking_ts:
+            delete_message(channel, thinking_ts)
+        post_message(channel, answer, thread_ts=thread_ts)
+        # Stay in current state — don't advance to PLANNING
+        return
+
     # Use new workflow parser
     plan = parse_workflow(clean_text, history=history[:-1] if len(history) > 1 else None)
     print(f"[PLAN] {json.dumps(plan, indent=2)}")
@@ -314,8 +327,17 @@ def _process_utterance(
         conv_set_state(thread_ts, "DONE")
         return
 
-    # Clarification needed
+    # Clarification needed — or silent empty plan (fall back to Q&A)
     if plan.get("needs_clarification") or plan.get("confidence", 0) < CONFIDENCE_THRESHOLD or not steps:
+        # If steps is empty and no clarification question, it's likely a question/unknown intent
+        if not steps and not plan.get("needs_clarification") and not plan.get("clarifying_question"):
+            answer = answer_question(clean_text, history=history[:-1] if len(history) > 1 else None,
+                                     current_plan=conv.get("current_plan") if conv else None)
+            conv_append(thread_ts, channel, "assistant", answer)
+            if thinking_ts:
+                delete_message(channel, thinking_ts)
+            post_message(channel, answer, thread_ts=thread_ts)
+            return
         question = plan.get("clarifying_question") or (
             "I'm not sure I understood that. Could you rephrase with the target email, action, amount, and duration?"
         )

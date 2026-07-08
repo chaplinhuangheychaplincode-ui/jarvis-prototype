@@ -240,9 +240,101 @@ Classify the message as one of:
 Be precise. "What does X mean?" is always answer. "Change X to Y" is always update.
 If the user confirms readiness ("looks good", "yes", "ok") treat as implicitly confirming — do NOT classify as update; return type=answer with answer="Ready to confirm — click ✅ to execute." so the UI knows to highlight the Confirm button."""
 
+ANSWER_SYSTEM = """You are Jarvis, HeyGen's internal ops bot assistant. The user has asked a question while in the middle of a workflow session.
+
+Answer the question directly and concisely. You have access to:
+- The current workflow plan (if one is being built)
+- The prior completed operation context (if any)
+- HeyGen platform knowledge (tiers, credits, subscriptions, limits)
+
+HeyGen platform facts you know:
+- Tiers: free, creator, pro, business, enterprise
+- generative_credit: used for AI video generation features. Granted with expire_days (default 30).
+- plan_credit: used for standard video minutes. Comes with subscription.
+- CMS bot endpoint hard cap: 1,000 credits per user per 90 days via the bot. Higher amounts need manual ops.
+- free tier: no paid subscription, limited to default plan_credit allocation. Cannot be upgraded via gift_subscription without changing tier.
+- Subscriptions granted via bot are trial=true (gifted, not billed).
+- Passwords: only visible at account creation time — not retrievable afterward. User must use password reset.
+- Production vs dev: bot in dev channel operates on cms-api-dev (sandbox). Prod bot on cms-api (production).
+
+Be helpful, factual, and brief. If you don't know something specific (e.g. exact account balance), say so and offer to look it up."""
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def is_question_intent(utterance: str) -> bool:
+    """
+    Quick heuristic: is this utterance a question rather than an action request?
+    Used to short-circuit parse_workflow and route to answer_question instead.
+    """
+    text = utterance.strip().lower()
+    # Ends with question mark
+    if text.endswith("?"):
+        return True
+    # Starts with a question word
+    question_starters = (
+        "what ", "what's ", "whats ", "when ", "when's ",
+        "how ", "why ", "who ", "where ",
+        "can ", "could ", "is ", "are ", "does ", "do ",
+        "will ", "would ", "should ", "shall ",
+        "is it ", "can i ", "can we ",
+    )
+    return any(text.startswith(s) for s in question_starters)
+
+
+def answer_question(
+    utterance: str,
+    history: list[dict[str, Any]] | None = None,
+    current_plan: dict[str, Any] | None = None,
+    model: str = "claude-haiku-4-5",
+) -> str:
+    """
+    Answer a question in the context of the current session.
+    Returns a plain-English answer string.
+    """
+    client = _get_client()
+
+    messages: list[Any] = []
+
+    # Inject prior op context from history
+    if history:
+        for msg in history:
+            role = msg.get("role", "user")
+            text = msg.get("text", "")
+            if role == "system":
+                messages.append({"role": "user", "content": f"[Context] {text}"})
+                messages.append({"role": "assistant", "content": "Understood."})
+            elif role == "user":
+                messages.append({"role": "user", "content": text})
+            else:
+                messages.append({"role": "assistant", "content": text})
+
+    # Inject current plan as context if available
+    if current_plan and current_plan.get("steps"):
+        import json as _json
+        plan_ctx = f"[Current workflow plan]\n```json\n{_json.dumps(current_plan, indent=2)}\n```"
+        messages.append({"role": "user", "content": plan_ctx})
+        messages.append({"role": "assistant", "content": "I have the current plan in context."})
+
+    # Add the question
+    if not messages or messages[-1].get("content") != utterance:
+        messages.append({"role": "user", "content": utterance})
+
+    response = client.messages.create(
+        model=model,
+        max_tokens=512,
+        temperature=0,
+        system=ANSWER_SYSTEM,
+        messages=messages,
+    )
+
+    for block in response.content:
+        if hasattr(block, "text"):
+            return block.text.strip()
+
+    return "I'm not sure — could you rephrase your question?"
+
 
 def parse_workflow(
     utterance: str,
