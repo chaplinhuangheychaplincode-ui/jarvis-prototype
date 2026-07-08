@@ -1096,6 +1096,11 @@ if __name__ == "__main__":
     print(f"   Confidence threshold: {CONFIDENCE_THRESHOLD:.0%}")
     print()
 
+    # Warm up Anthropic client at startup to avoid first-request cold start
+    import workflow_parser as _wp
+    _wp._get_client()
+    print("   Anthropic client: warmed up")
+
     # Start TTL expiry sweep in background
     sweep_t = threading.Thread(target=_expiry_sweep, daemon=True, name="expiry-sweep")
     sweep_t.start()

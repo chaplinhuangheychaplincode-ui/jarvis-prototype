@@ -29,8 +29,8 @@ import clickhouse_connect
 # ---------------------------------------------------------------------------
 
 _CH_CLIENT: Any = None
-_MAX_RETRIES = 3
-_RETRY_BASE_SECONDS = 1  # doubles each attempt: 1s, 2s, 4s
+_MAX_RETRIES = 2
+_RETRY_BASE_SECONDS = 0.5  # doubles each attempt: 0.5s, 1s
 
 
 def _secret(name: str) -> str:
@@ -49,8 +49,8 @@ def _get_client() -> Any:
             username=_secret("CLICKHOUSE_USERNAME"),
             password=_secret("CLICKHOUSE_PASSWORD"),
             secure=True,
-            connect_timeout=10,
-            send_receive_timeout=30,
+            connect_timeout=5,
+            send_receive_timeout=5,
         )
     return _CH_CLIENT
 

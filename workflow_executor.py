@@ -10,7 +10,9 @@ Partial execution is tracked so the bot can offer retry of remaining steps.
 """
 from __future__ import annotations
 
+import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import heygen_cms_api as heygen
@@ -110,22 +112,29 @@ def execute_workflow(
             sr = StepResult(step=step, success=True, result=result, elapsed_ms=elapsed_ms)
             completed.append(sr)
 
-            # Write audit
-            try:
-                audit_id = write_audit(
-                    actor_slack_id=actor_slack_id,
-                    action=action,
-                    result="success",
-                    intent=step,
-                    before_state=before_states.get(email, {}),
-                    after_state=result,
-                    channel_id=channel_id,
-                    message_ts=message_ts,
-                )
-                audit_ids.append(audit_id)
-            except Exception as ae:
-                print(f"[audit] WARN step {step_num}: {ae}", flush=True)
-                audit_ids.append(f"err_{step_num}")
+            # Write audit asynchronously — don't block user response on CH latency
+            def _async_audit(
+                _actor=actor_slack_id, _action=action, _result=result,
+                _intent=step, _before=before_states.get(email, {}),
+                _channel=channel_id, _msg_ts=message_ts,
+            ) -> None:
+                try:
+                    aid = write_audit(
+                        actor_slack_id=_actor,
+                        action=_action,
+                        result="success",
+                        intent=_intent,
+                        before_state=_before,
+                        after_state=_result,
+                        channel_id=_channel,
+                        message_ts=_msg_ts,
+                    )
+                    audit_ids.append(aid)
+                except Exception as ae:
+                    print(f"[audit] WARN step {step_num}: {ae}", flush=True)
+                    audit_ids.append(f"err_{step_num}")
+
+            threading.Thread(target=_async_audit, daemon=True).start()
 
         except Exception as e:
             elapsed_ms = int((time.time() - t0) * 1000)
