@@ -40,6 +40,7 @@ from pending_store import (
     EXPIRY_MINUTES,
 )
 from audit_log import write_audit, query_audit, audit_has_batch_row
+from feedback_store import is_feedback_intent, extract_feedback, write_feedback, list_feedback
 from slack_client import (
     post_message, update_message, delete_message, get_user_info,
     build_confirmation_card, build_clarifying_question_card, build_audit_ack_card,
@@ -287,6 +288,46 @@ def _process_utterance(
         # Stay in current state — don't advance to PLANNING
         return
 
+    # Feedback short-circuit — log and acknowledge, don't try to plan
+    if is_feedback_intent(clean_text):
+        if thinking_ts:
+            delete_message(channel, thinking_ts)
+        # Extract sentiment + clean text in background (non-blocking)
+        import threading as _threading
+        def _log_feedback() -> None:
+            try:
+                result = extract_feedback(clean_text)
+                # Find most recent pending_id for this thread (for correlation)
+                from pending_store import get_latest_pending_id_for_thread
+                pid = get_latest_pending_id_for_thread(thread_ts) or ""
+                fb_id = write_feedback(
+                    user_id=user_id,
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    raw_text=clean_text,
+                    sentiment=result.get("sentiment", "neutral"),
+                    extracted=result.get("extracted", ""),
+                    pending_id=pid,
+                )
+                sentiment = result.get("sentiment", "neutral")
+                emoji = "🙏" if sentiment == "positive" else "📝"
+                print(f"[FEEDBACK] {fb_id} sentiment={sentiment} text={result.get('extracted','')[:80]}", flush=True)
+                # Post to log channel if configured
+                _post_to_log_channel(
+                    f"{emoji} Feedback `{fb_id}` from <@{user_id}> | {sentiment} | _{result.get('extracted', clean_text[:80])}_"
+                )
+            except Exception as exc:
+                print(f"[FEEDBACK] log error: {exc}", flush=True)
+        _threading.Thread(target=_log_feedback, daemon=True).start()
+        ack = (
+            "Thanks for the feedback — logged it for the team to review! 📝"
+            if not any(w in clean_text.lower() for w in ("great", "good job", "perfect", "love", "awesome", "well done", "thank"))
+            else "Glad to hear it! 🙌 Noted."
+        )
+        post_message(channel, ack, thread_ts=thread_ts)
+        # Stay in current state so the user can continue if they want
+        return
+
     # Use new workflow parser
     plan = parse_workflow(clean_text, history=history[:-1] if len(history) > 1 else None)
     print(f"[PLAN] {json.dumps(plan, indent=2)}")
@@ -516,6 +557,22 @@ def handle_mention(event: dict[str, Any]) -> None:
             lines = [f"*Last {len(rows)} actions for `{target_email}`:*"]
             for r in rows:
                 lines.append(f"• `{r['action']}` → `{r['result']}` at {r['ts'][:16]} (audit: `{r['audit_id']}`)")
+            post_message(channel, "\n".join(lines), thread_ts=thread_ts)
+        return
+
+    # Feedback log viewer (team use)
+    if clean_text.lower().startswith("!feedback"):
+        rows = list_feedback(limit=10)
+        if not rows:
+            post_message(channel, "No feedback logged yet.", thread_ts=thread_ts)
+        else:
+            lines = [f"*Last {len(rows)} feedback entries:*"]
+            for r in rows:
+                emoji = "🙏" if r["sentiment"] == "positive" else ("😞" if r["sentiment"] == "negative" else "📝")
+                lines.append(
+                    f"{emoji} `{r['id']}` <@{r['user_id']}> | *{r['sentiment']}* | {r['ts'][:16]}\n"
+                    f"  _{r['extracted'] or r['raw_text'][:80]}_"
+                )
             post_message(channel, "\n".join(lines), thread_ts=thread_ts)
         return
 

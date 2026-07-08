@@ -261,6 +261,17 @@ def expire_by_id(pending_id: str) -> bool:
     return changed
 
 
+def get_latest_pending_id_for_thread(thread_ts: str) -> str | None:
+    """Return the most recent pending_id for a thread (any status), for feedback correlation."""
+    conn = _conn()
+    row = conn.execute(
+        "SELECT pending_id FROM pending_confirmations WHERE thread_ts=? ORDER BY created_at DESC LIMIT 1",
+        (thread_ts,)
+    ).fetchone()
+    conn.close()
+    return row["pending_id"] if row else None
+
+
 if __name__ == "__main__":
     # smoke test
     pid = write_pending(
