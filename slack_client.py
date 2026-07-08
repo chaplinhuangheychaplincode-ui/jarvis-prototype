@@ -54,7 +54,9 @@ def post_message(channel: str, text: str, thread_ts: str | None = None,
 
 
 def update_message(channel: str, ts: str, text: str, blocks: list | None = None) -> dict[str, Any]:
-    payload: dict[str, Any] = {"channel": channel, "ts": ts, "text": text}
+    # Slack rejects empty text even when blocks are provided
+    safe_text = text if text and text.strip() else "_ _"
+    payload: dict[str, Any] = {"channel": channel, "ts": ts, "text": safe_text}
     if blocks:
         payload["blocks"] = blocks
     return _call("chat.update", payload)
