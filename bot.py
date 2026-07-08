@@ -1066,6 +1066,20 @@ def on_cancel_action(ack, body):
     t.start()
 
 
+@app.action("confirm_plan")
+def on_confirm_plan(ack, body):
+    ack()
+    t = threading.Thread(target=handle_block_action, args=(body,), daemon=True)
+    t.start()
+
+
+@app.action("cancel_plan")
+def on_cancel_plan(ack, body):
+    ack()
+    t = threading.Thread(target=handle_block_action, args=(body,), daemon=True)
+    t.start()
+
+
 @app.event("message")
 def on_message(event):
     t = threading.Thread(target=handle_thread_reply, args=(event,), daemon=True)
