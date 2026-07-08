@@ -168,6 +168,16 @@ def _execute_step(step: dict[str, Any], before_states: dict[str, Any]) -> dict[s
         )
 
     elif action == "create_account":
+        # Check if account already exists (before_state fetched before this step)
+        existing = before_states.get(email, {})
+        if existing.get("user_id"):
+            # Account exists — skip creation, surface a warning instead of failing
+            return {
+                "skipped": True,
+                "reason": f"Account `{email}` already exists (user_id={existing['user_id']}). Skipping creation.",
+                "existing_tier": existing.get("tier", "unknown"),
+                "warning": True,
+            }
         return heygen.execute_create_account(
             email=email,
             tier=step.get("tier"),

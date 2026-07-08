@@ -204,6 +204,12 @@ GUARDRAILS (enforce these by adding steps automatically):
 - revoke_grant on type=quota must have quota_id OR be preceded by get_info to retrieve it.
 - If the request mentions "a lot of credits" or similar vague amounts, set needs_clarification=true.
 
+CONTEXT CARRY-FORWARD (CRITICAL):
+- If you see a [Context] message containing [Prior completed op: action=X, email=Y, ...], that Y is the known target email for this thread.
+- Use Y as target_email for ALL steps in the new plan unless the user explicitly provides a DIFFERENT email.
+- Do NOT ask for the email again if it is already in the prior op context.
+- "how many credits does it have now", "check the balance", "what tier is it on" — all refer to Y without needing re-confirmation.
+
 MULTI-STEP EXAMPLES:
 - "create pro account with 50k credits for x@y.com"
     → [create_account(x@y.com), quota_grant(x@y.com, pro, 50000, generative_credit, 30d)]
@@ -216,11 +222,11 @@ SINGLE-STEP:
 - "look up x@y.com" → [lookup(x@y.com)]
 - "grant x@y.com 500 credits" → [quota_grant(x@y.com, 500, generative_credit, 30d)]
 
-CLARIFY when: email is missing, credit amount is vague ("a lot"), action is ambiguous.
-DO NOT clarify when: duration is missing (default 30d), product is missing (default generative_credit).
+CLARIFY when: email is missing AND not available from prior op context, credit amount is vague ("a lot"), action is ambiguous.
+DO NOT clarify when: duration is missing (default 30d), product is missing (default generative_credit), email is available from prior op context.
 
 Thread context: if you see a [Context] note with a [Prior completed op: ...] marker,
-use it to resolve "them", "that account", etc. The prior op is DONE — do not re-propose it."""
+use it to resolve "them", "that account", "it", etc. The prior op is DONE — do not re-propose it."""
 
 REFINE_SYSTEM = """You are Jarvis, HeyGen's internal ops bot. The user is reviewing a workflow plan and has sent a follow-up message.
 
@@ -249,6 +255,7 @@ def parse_workflow(
     """
     client = _get_client()
     messages: list[Any] = _build_messages(history, utterance)
+    context_email = _extract_context_email(history)
 
     response = client.messages.create(
         model=model,
@@ -264,7 +271,7 @@ def parse_workflow(
         if block.type == "tool_use" and block.name == "build_workflow":
             plan = dict(block.input)
             plan["raw_utterance"] = utterance
-            plan = _validate_plan(plan)
+            plan = _validate_plan(plan, context_email=context_email)
             return plan
 
     return {
@@ -361,9 +368,29 @@ def _build_messages(
     return messages
 
 
-def _validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
+def _extract_context_email(history: list[dict[str, Any]] | None) -> str:
+    """Extract target_email from a [Prior completed op: ..., email=X] context marker in history."""
+    if not history:
+        return ""
+    import re
+    for msg in history:
+        if msg.get("role") == "system":
+            m = re.search(r"email=([^\s,\]]+)", msg.get("text", ""))
+            if m:
+                return m.group(1)
+    return ""
+
+
+def _validate_plan(plan: dict[str, Any], context_email: str = "") -> dict[str, Any]:
     """Post-parse validation and normalization."""
     steps = plan.get("steps", [])
+
+    # Backfill missing target_email from context if available
+    if context_email:
+        for step in steps:
+            action = step.get("action", "")
+            if action != "bulk_grant" and not step.get("target_email"):
+                step["target_email"] = context_email
 
     # Ensure step numbers are sequential
     for i, step in enumerate(steps):
@@ -400,6 +427,56 @@ def _validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
             # Renumber
             for i, s in enumerate(steps):
                 s["step"] = i + 1
+
+    # Guardrail: quota_grant with no prior account check → inject get_info pre-confirm
+    # so the approver sees current balance before granting
+    actions = [s["action"] for s in steps]
+    if "quota_grant" in actions:
+        qg_idx = actions.index("quota_grant")
+        pre_info = [s for s in steps[:qg_idx] if s["action"] in ("get_info", "create_account")]
+        if not pre_info:
+            email = steps[qg_idx].get("target_email", "")
+            get_info_step = {
+                "step": 0,
+                "action": "get_info",
+                "target_email": email,
+                "pre_confirm": True,
+                "reason": "Auto-injected: check current balance before granting",
+            }
+            steps.insert(qg_idx, get_info_step)
+            for i, s in enumerate(steps):
+                s["step"] = i + 1
+
+    # Credit limit guardrails (based on CMS backend rules)
+    # MAX_GIFT_QUOTA_PER_90_DAYS = 1000 for bot endpoint
+    CMS_CREDIT_CAP = 1_000
+    FREE_TIER_CREDIT_WARN = 500  # free accounts: warn above 500, hard CMS limit is 1000
+
+    guardrails_applied = list(plan.get("guardrails_applied", []))
+    for step in steps:
+        if step.get("action") != "quota_grant":
+            continue
+        credits = step.get("credits", 0) or 0
+        tier = step.get("tier", "") or ""
+
+        if tier == "free" and credits > FREE_TIER_CREDIT_WARN:
+            msg = (
+                f"⚠️ *Guardrail:* Free-tier accounts are limited to {CMS_CREDIT_CAP} credits "
+                f"per 90 days by the CMS backend. Requesting {credits} credits on a free account "
+                f"may be rejected. Consider upgrading the tier first."
+            )
+            guardrails_applied.append(msg)
+            step["pre_confirm"] = True  # Force explicit confirmation for this step
+
+        elif credits > CMS_CREDIT_CAP:
+            msg = (
+                f"⚠️ *Guardrail:* CMS hard cap is {CMS_CREDIT_CAP} credits per user per 90 days "
+                f"(bot endpoint). Requesting {credits} may be rejected if prior grants exist."
+            )
+            guardrails_applied.append(msg)
+            step["pre_confirm"] = True
+
+    plan["guardrails_applied"] = guardrails_applied
 
     plan["steps"] = steps
     return plan

@@ -813,6 +813,12 @@ def build_plan_card(plan: dict, pending_id: str) -> list:
     if pre_steps:
         pre_desc = ", ".join(f"`{s['action']}`" for s in pre_steps)
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"_Auto-runs before execution: {pre_desc}_"}]})
+    # Show guardrail warnings on the plan card
+    guardrails = plan.get("guardrails_applied", [])
+    if guardrails:
+        blocks.append({"type": "divider"})
+        for g in guardrails:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": g}})
     blocks.append({"type": "divider"})
     blocks.append({
         "type": "actions",
@@ -830,11 +836,19 @@ def build_plan_card(plan: dict, pending_id: str) -> list:
 
 def build_execution_complete_card(completed: list, audit_ids: list, actor_slack_id: str, elapsed_s: float) -> list:
     blocks = [{"type": "header", "text": {"type": "plain_text", "text": "✅ Workflow Complete"}}]
+    warnings = []
     for sr in completed:
         if sr.step.get("pre_confirm"):
             continue
-        blocks.append({"type": "section",
-            "text": {"type": "mrkdwn", "text": f"✅ Step {sr.step_num}: {_fmt_step(sr.step)} _{sr.elapsed_ms}ms_"}})
+        result = sr.result or {}
+        if result.get("skipped") and result.get("warning"):
+            # Skipped step with a warning — show as warning row, not success
+            blocks.append({"type": "section",
+                "text": {"type": "mrkdwn", "text": f"⚠️ Step {sr.step_num}: {_fmt_step(sr.step)} _(skipped)_\n  _{result.get('reason', '')}_"}})
+            warnings.append(result.get("reason", ""))
+        else:
+            blocks.append({"type": "section",
+                "text": {"type": "mrkdwn", "text": f"✅ Step {sr.step_num}: {_fmt_step(sr.step)} _{sr.elapsed_ms}ms_"}})
     blocks.append({"type": "divider"})
     audit_str = " · ".join(f"`{a}`" for a in audit_ids if not a.startswith("err_"))
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
