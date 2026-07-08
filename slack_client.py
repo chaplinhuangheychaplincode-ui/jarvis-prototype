@@ -765,3 +765,103 @@ def build_investigation_card(
 
     return blocks
 
+
+
+# ---------------------------------------------------------------------------
+# Workflow plan cards (multi-step workflow architecture)
+# ---------------------------------------------------------------------------
+
+def _fmt_step(step: dict) -> str:
+    action = step.get("action", "")
+    email = step.get("target_email", "")
+    pre = " _(auto, read-only)_" if step.get("pre_confirm") else ""
+    parts = [f"`{action}`"]
+    if email:
+        parts.append(f"`{email}`")
+    if step.get("tier"):
+        parts.append(f"tier=`{step['tier']}`")
+    if step.get("credits"):
+        parts.append(f"{step['credits']:,} `{step.get('product','generative_credit')}`")
+    if step.get("duration_days") and action not in ("get_info", "lookup"):
+        parts.append(f"{step['duration_days']}d")
+    if step.get("revoke_type"):
+        parts.append(f"revoke=`{step['revoke_type']}`")
+    if step.get("quota_id"):
+        parts.append(f"quota_id=`{step['quota_id']}`")
+    if step.get("target_emails"):
+        parts.append(f"{len(step['target_emails'])} users")
+    return " · ".join(parts) + pre
+
+
+def build_plan_card(plan: dict, pending_id: str) -> list:
+    blocks = []
+    blocks.append({"type": "header", "text": {"type": "plain_text", "text": "📋 Workflow Plan"}})
+    if plan.get("summary"):
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": plan["summary"]}})
+    blocks.append({"type": "divider"})
+    steps = plan.get("steps", [])
+    for step in steps:
+        if step.get("pre_confirm"):
+            continue
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Step {step.get('step','?')}:* {_fmt_step(step)}"},
+        })
+    pre_steps = [s for s in steps if s.get("pre_confirm")]
+    if pre_steps:
+        pre_desc = ", ".join(f"`{s['action']}`" for s in pre_steps)
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"_Auto-runs before execution: {pre_desc}_"}]})
+    blocks.append({"type": "divider"})
+    blocks.append({
+        "type": "actions",
+        "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "✅ Confirm"},
+             "style": "primary", "action_id": "confirm_plan", "value": pending_id},
+            {"type": "button", "text": {"type": "plain_text", "text": "❌ Cancel"},
+             "style": "danger", "action_id": "cancel_plan", "value": pending_id},
+        ],
+    })
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
+        "text": f"Reply in this thread to ask questions or request changes · `{pending_id}`"}]})
+    return blocks
+
+
+def build_execution_complete_card(completed: list, audit_ids: list, actor_slack_id: str, elapsed_s: float) -> list:
+    blocks = [{"type": "header", "text": {"type": "plain_text", "text": "✅ Workflow Complete"}}]
+    for sr in completed:
+        if sr.step.get("pre_confirm"):
+            continue
+        blocks.append({"type": "section",
+            "text": {"type": "mrkdwn", "text": f"✅ Step {sr.step_num}: {_fmt_step(sr.step)} _{sr.elapsed_ms}ms_"}})
+    blocks.append({"type": "divider"})
+    audit_str = " · ".join(f"`{a}`" for a in audit_ids if not a.startswith("err_"))
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
+        "text": f"Confirmed by <@{actor_slack_id}> · {elapsed_s:.1f}s · {audit_str}"}]})
+    return blocks
+
+
+def build_execution_failure_card(completed: list, failed: object, remaining_steps: list, recovery_pending_id: str) -> list:
+    blocks = [{"type": "header", "text": {"type": "plain_text", "text": "⚠️ Workflow Partially Failed"}}]
+    for sr in completed:
+        if sr.step.get("pre_confirm"):
+            continue
+        blocks.append({"type": "section",
+            "text": {"type": "mrkdwn", "text": f"✅ Step {sr.step_num}: {_fmt_step(sr.step)}"}})
+    err_msg = getattr(failed, "result", {}).get("error", "Unknown error")
+    step_num = getattr(failed, "step_num", "?")
+    step_dict = getattr(failed, "step", {})
+    blocks.append({"type": "section",
+        "text": {"type": "mrkdwn", "text": f"❌ Step {step_num}: {_fmt_step(step_dict)}\n  _{err_msg}_"}})
+    if remaining_steps:
+        blocks.append({"type": "divider"})
+        for step in remaining_steps:
+            blocks.append({"type": "section",
+                "text": {"type": "mrkdwn", "text": f"⏭ Step {step.get('step','?')}: {_fmt_step(step)} _(skipped)_"}})
+        blocks.append({"type": "divider"})
+        blocks.append({"type": "actions", "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "🔁 Retry remaining"},
+             "style": "primary", "action_id": "confirm_plan", "value": recovery_pending_id},
+            {"type": "button", "text": {"type": "plain_text", "text": "❌ Abandon"},
+             "style": "danger", "action_id": "cancel_plan", "value": recovery_pending_id},
+        ]})
+    return blocks

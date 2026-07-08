@@ -44,12 +44,16 @@ from slack_client import (
     post_message, update_message, get_user_info,
     build_confirmation_card, build_clarifying_question_card, build_audit_ack_card,
     build_bulk_confirmation_card, build_investigation_card,
+    build_plan_card, build_execution_complete_card, build_execution_failure_card,
 )
 import heygen_cms_api as heygen
 from investigator import investigate as run_investigation
+from workflow_parser import parse_workflow, refine_workflow
+from workflow_executor import execute_workflow
 from conversation_store import (
     upsert_conversation, append_message as conv_append, get_conversation,
     is_active as conv_is_active, set_state as conv_set_state,
+    set_plan as conv_set_plan, confirm_plan as conv_confirm_plan,
     list_expired_conversations, expire_conversation,
 )
 
@@ -255,171 +259,198 @@ def _process_utterance(
     clean_text: str,
 ) -> None:
     """
-    Core logic: given clean text + conversation history, either clarify or propose.
-    Used by both @mention and thread-reply handlers.
+    Core logic: NL utterance → workflow plan → PLANNING state.
+    Used by @mention handler. Thread replies in PLANNING go to _handle_planning_reply.
     """
-    # Fetch conversation history (may be empty for first message)
+    import uuid as _uuid
+
     conv = get_conversation(thread_ts)
     history: list[dict[str, str]] = conv["messages"] if conv else []
-
-    # Append user message to history
     history = conv_append(thread_ts, channel, "user", clean_text)
 
-    post_message(channel, "⏳ Thinking...", thread_ts=thread_ts)
+    thinking_resp = post_message(channel, "⏳ Thinking...", thread_ts=thread_ts)
+    thinking_ts = thinking_resp.get("ts", "")
 
-    # Pass full history to parser
-    intent = parse_intent(clean_text, history=history[:-1] if len(history) > 1 else None)
-    print(f"[INTENT] {json.dumps(intent, indent=2)}")
+    # Use new workflow parser
+    plan = parse_workflow(clean_text, history=history[:-1] if len(history) > 1 else None)
+    print(f"[PLAN] {json.dumps(plan, indent=2)}")
 
-    # Explain / help — instant bypass, no confirm needed
-    if intent.get("action") == "explain":
+    # Explain / help bypass
+    steps = plan.get("steps", [])
+    if steps and steps[0].get("action") == "explain":
+        if thinking_ts:
+            update_message(channel, thinking_ts, "")
         conv_set_state(thread_ts, "DONE")
         handle_explain(channel, thread_ts)
         return
 
-    # ── INVESTIGATE — agentic read-only loop ─────────────────────────────────
-    if intent.get("action") == "investigate":
-        conv_set_state(thread_ts, "DONE")
-        target_email = intent.get("target_email", "")
-        question = intent.get("reason") or clean_text  # use original utterance as question
+    # Investigate bypass
+    if steps and steps[0].get("action") == "investigate":
+        if thinking_ts:
+            update_message(channel, thinking_ts, "🔍 Investigating...")
+        target_email = steps[0].get("target_email", "")
+        question = steps[0].get("reason") or clean_text
+        _progress_ts: list[str] = [thinking_ts]
 
-        # Progress callback: posts live updates as thread replies
-        _progress_ts: list[str] = []
         def _progress(msg: str) -> None:
-            if not _progress_ts:
-                resp = post_message(channel, msg, thread_ts=thread_ts)
-                _progress_ts.append(resp.get("ts", ""))
-            else:
+            if _progress_ts[0]:
                 update_message(channel, _progress_ts[0], msg)
 
-        result = run_investigation(
-            email=target_email,
-            question=question,
-            progress_cb=_progress,
-        )
-
-        # Pre-write one pending per proposed action so buttons work immediately
-        import uuid as _uuid
+        result = run_investigation(email=target_email, question=question, progress_cb=_progress)
         pending_ids: list[str] = []
         for action_intent in result.proposed_actions:
             pid = f"jrv_p_{_uuid.uuid4().hex[:8]}"
-            # Enrich intent with the investigated user's before_state
             before = heygen.get_user_state(target_email) if target_email else {}
-            write_pending(
-                actor_slack_id=user_id,
-                intent=action_intent,
-                before_state=before,
-                channel_id=channel,
-                thread_ts=thread_ts,
-                message_ts="",       # will be updated when card is posted
-                pending_id=pid,
-            )
+            write_pending(actor_slack_id=user_id, intent=action_intent, before_state=before,
+                          channel_id=channel, thread_ts=thread_ts, message_ts="", pending_id=pid)
             pending_ids.append(pid)
-
-        # Post investigation card
         card_blocks = build_investigation_card(result, pending_ids)
-        # Delete the progress message first (clean up)
-        if _progress_ts:
-            update_message(channel, _progress_ts[0], "✅ Investigation complete — see below")
-        resp = post_message(
-            channel,
-            f"🔍 Investigation for `{target_email}`",
-            thread_ts=thread_ts,
-            blocks=card_blocks,
-        )
-        card_ts = resp.get("ts", "")
-
-        # Back-fill card_ts into the pending rows so TOCTOU re-snapshot works
+        if thinking_ts:
+            update_message(channel, thinking_ts, "✅ Investigation complete")
+        resp = post_message(channel, f"🔍 Investigation for `{target_email}`",
+                            thread_ts=thread_ts, blocks=card_blocks)
         for pid in pending_ids:
-            update_message_ts(pid, card_ts)
-
+            update_message_ts(pid, resp.get("ts", ""))
+        conv_set_state(thread_ts, "DONE")
         return
 
     # Clarification needed
-    if intent.get("needs_clarification") or intent.get("confidence", 0) < CONFIDENCE_THRESHOLD:
-        question = intent.get("clarifying_question") or (
-            "I'm not sure I understood that correctly. Could you rephrase with "
-            "the target email, action, amount, and duration?"
+    if plan.get("needs_clarification") or plan.get("confidence", 0) < CONFIDENCE_THRESHOLD or not steps:
+        question = plan.get("clarifying_question") or (
+            "I'm not sure I understood that. Could you rephrase with the target email, action, amount, and duration?"
         )
-        # Record assistant question in history
         conv_append(thread_ts, channel, "assistant", question)
-        # Keep state as GATHERING
         updated_conv = get_conversation(thread_ts)
         if updated_conv:
             upsert_conversation(thread_ts, channel, updated_conv["messages"], state="GATHERING")
+        if thinking_ts:
+            update_message(channel, thinking_ts, "")
         blocks = build_clarifying_question_card(question)
         post_message(channel, question, thread_ts=thread_ts, blocks=blocks)
         return
 
-    # Intent resolved — transition to CONFIRMING
-    conv_set_state(thread_ts, "CONFIRMING", final_intent=intent)
+    # Run pre-confirm steps (read-only, no HITL)
+    pre_steps = [s for s in steps if s.get("pre_confirm")]
+    before_states: dict[str, Any] = {}
+    if pre_steps:
+        if thinking_ts:
+            update_message(channel, thinking_ts, "🔍 Fetching account info...")
+        for pre_step in pre_steps:
+            email = pre_step.get("target_email", "")
+            try:
+                state = heygen.get_user_state(email)
+                before_states[email] = state
+                if state.get("user_id") is None:
+                    if thinking_ts:
+                        update_message(channel, thinking_ts, "")
+                    post_message(channel,
+                                 f"❌ User `{email}` not found in HeyGen. Check the email and try again.",
+                                 thread_ts=thread_ts)
+                    conv_set_state(thread_ts, "DONE")
+                    return
+            except Exception as e:
+                print(f"[PRE_CONFIRM] {e}", flush=True)
 
-    target_email = intent.get("target_email", "")
-    action = intent.get("action")
-
-    # ---- BULK GRANT path ----
-    if action == "bulk_grant":
-        import uuid
-        pending_id = f"jrv_p_{uuid.uuid4().hex[:8]}"
-        resp = post_message(
-            channel,
-            f"Bulk grant preview for {len(intent.get('target_emails', []))} users — confirm or cancel below",
-            thread_ts=thread_ts,
-            blocks=build_bulk_confirmation_card(intent, pending_id),
-        )
-        card_ts = resp["ts"]
-        write_pending(
-            actor_slack_id=user_id,
-            intent=intent,
-            before_state={},
-            channel_id=channel,
-            thread_ts=thread_ts,
-            message_ts=card_ts,
-            pending_id=pending_id,
-        )
-        print(f"[BULK_PENDING] {pending_id} stored for {len(intent.get('target_emails', []))} users")
-        return
-
-    # Guard: validate user exists for ops that require it
-    if action in ("lookup", "quota_grant", "revoke_grant", "reduce_grant"):
-        before_state = heygen.get_user_state(target_email)
-        if before_state.get("user_id") is None:
-            err = before_state.get("error", {})
-            code = err.get("code", "?") if isinstance(err, dict) else "?"
-            post_message(
-                channel,
-                f"❌ User `{target_email}` not found in HeyGen (CMS code {code}). "
-                f"Check the email and try again.",
-                thread_ts=thread_ts,
-            )
-            conv_set_state(thread_ts, "DONE")
-            return
-    elif action == "create_account":
-        before_state = {}
-    else:
-        before_state = heygen.get_user_state(target_email)
-
-    import uuid
-    pending_id = f"jrv_p_{uuid.uuid4().hex[:8]}"
-
+    # Transition to PLANNING — store plan, post plan card
+    pending_id = f"jrv_p_{_uuid.uuid4().hex[:8]}"
+    if thinking_ts:
+        update_message(channel, thinking_ts, "")
     resp = post_message(
         channel,
-        f"Action preview for `{target_email}` — confirm or cancel below",
+        f"📋 Here's my plan — review and confirm:",
         thread_ts=thread_ts,
-        blocks=build_confirmation_card(intent, before_state, pending_id),
+        blocks=build_plan_card(plan, pending_id),
     )
-    card_ts = resp["ts"]
+    card_ts = resp.get("ts", "")
+    conv_set_plan(thread_ts, plan, card_ts=card_ts, state="PLANNING")
 
+    # Store plan in pending_store so button handler can find it
     write_pending(
         actor_slack_id=user_id,
-        intent=intent,
-        before_state=before_state,
+        intent={"action": "workflow", "plan": plan, "before_states": before_states},
+        before_state=before_states,
         channel_id=channel,
         thread_ts=thread_ts,
         message_ts=card_ts,
         pending_id=pending_id,
     )
-    print(f"[PENDING] {pending_id} stored, waiting for button click on {card_ts}")
+    print(f"[PLAN_PENDING] {pending_id} stored, {len(steps)} steps")
+
+
+def _handle_planning_reply(
+    channel: str,
+    thread_ts: str,
+    user_id: str,
+    clean_text: str,
+) -> None:
+    """Handle a thread reply while in PLANNING state (Phase 3 — refine loop)."""
+    conv = get_conversation(thread_ts)
+    if not conv:
+        return
+    current_plan = conv.get("current_plan")
+    if not current_plan:
+        return
+
+    history = conv_append(thread_ts, channel, "user", clean_text)
+
+    thinking_resp = post_message(channel, "⏳ Thinking...", thread_ts=thread_ts)
+    thinking_ts = thinking_resp.get("ts", "")
+
+    refine_result = refine_workflow(
+        utterance=clean_text,
+        current_plan=current_plan,
+        history=history[:-1] if len(history) > 1 else None,
+    )
+    print(f"[REFINE] {json.dumps(refine_result, indent=2)}")
+
+    rtype = refine_result.get("type", "clarify")
+
+    if rtype == "answer":
+        answer = refine_result.get("answer", "I'm not sure — could you rephrase?")
+        conv_append(thread_ts, channel, "assistant", answer)
+        if thinking_ts:
+            update_message(channel, thinking_ts, "")
+        post_message(channel, answer, thread_ts=thread_ts)
+        # Plan unchanged, stay PLANNING
+
+    elif rtype == "update":
+        updated_plan = refine_result.get("updated_plan")
+        if updated_plan:
+            # Find the pending_id from pending_store so we can update the card
+            import uuid as _uuid
+            pending_id = f"jrv_p_{_uuid.uuid4().hex[:8]}"
+            if thinking_ts:
+                update_message(channel, thinking_ts, "")
+            resp = post_message(
+                channel, "📋 Updated plan — review and confirm:",
+                thread_ts=thread_ts,
+                blocks=build_plan_card(updated_plan, pending_id),
+            )
+            card_ts = resp.get("ts", "")
+            conv_set_plan(thread_ts, updated_plan, card_ts=card_ts)
+            # Store updated pending
+            write_pending(
+                actor_slack_id=user_id,
+                intent={"action": "workflow", "plan": updated_plan, "before_states": {}},
+                before_state={},
+                channel_id=channel,
+                thread_ts=thread_ts,
+                message_ts=card_ts,
+                pending_id=pending_id,
+            )
+            post_message(channel, "✅ Plan updated — review above and click Confirm when ready.",
+                         thread_ts=thread_ts)
+        else:
+            if thinking_ts:
+                update_message(channel, thinking_ts, "")
+            post_message(channel, "⚠️ Could not update plan — please try again.", thread_ts=thread_ts)
+
+    else:  # clarify
+        question = refine_result.get("clarifying_question", "Could you clarify that?")
+        conv_append(thread_ts, channel, "assistant", question)
+        if thinking_ts:
+            update_message(channel, thinking_ts, "")
+        post_message(channel, question, thread_ts=thread_ts)
 
 
 def handle_mention(event: dict[str, Any]) -> None:
@@ -494,8 +525,8 @@ def handle_thread_reply(event: dict[str, Any]) -> None:
         return  # not an active Jarvis conversation
 
     conv = get_conversation(thread_ts)
-    if not conv or conv["state"] != "GATHERING":
-        return  # only respond during GATHERING (not CONFIRMING/DONE)
+    if not conv or conv["state"] not in ("GATHERING", "PLANNING"):
+        return  # only respond during GATHERING or PLANNING
 
     text = event.get("text", "")
     user_id = event.get("user", "")
@@ -505,14 +536,119 @@ def handle_thread_reply(event: dict[str, Any]) -> None:
     if not clean_text:
         return
 
-    print(f"[THREAD_REPLY] {user_id} in {channel} (thread {thread_ts}): {clean_text}")
-    _process_utterance(channel, thread_ts, user_id, clean_text)
+    print(f"[THREAD_REPLY] {user_id} in {channel} (thread {thread_ts}): {clean_text} (state={conv['state']})")
+
+    if conv["state"] == "PLANNING":
+        _handle_planning_reply(channel, thread_ts, user_id, clean_text)
+    else:
+        _process_utterance(channel, thread_ts, user_id, clean_text)
+
+
+def _handle_plan_button(
+    action_id: str,
+    pending_id: str,
+    user_id: str,
+    channel_id: str,
+) -> None:
+    """Handle confirm_plan / cancel_plan button clicks."""
+    import uuid as _uuid
+
+    pending = get_by_pending_id(pending_id)
+    if not pending:
+        post_message(channel_id, f"⚠️ Plan `{pending_id}` has already been completed or expired.")
+        return
+    if pending["status"] not in ("pending", "executing"):
+        post_message(channel_id, f"⚠️ Plan `{pending_id}` is already `{pending['status']}`.",
+                     thread_ts=pending["thread_ts"])
+        return
+
+    thread_ts = pending["thread_ts"]
+    intent = json.loads(pending["intent_json"])
+    plan = intent.get("plan", {})
+    before_states = intent.get("before_states", {})
+
+    if action_id == "cancel_plan":
+        mark_cancelled(pending_id)
+        conv_set_state(thread_ts, "DONE")
+        update_message(channel_id, pending["message_ts"],
+                       f"~~Plan cancelled~~ `{pending_id}`",
+                       blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                               "text": f"❌ *Plan cancelled* by <@{user_id}> · `{pending_id}`"}}])
+        return
+
+    # confirm_plan — atomic claim
+    claimed = claim_pending(pending_id)
+    if not claimed:
+        post_message(channel_id, f"⚠️ Plan `{pending_id}` already claimed — duplicate click ignored.",
+                     thread_ts=thread_ts)
+        return
+
+    update_message(channel_id, pending["message_ts"], "⏳ Executing workflow...",
+                   blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                           "text": f"⏳ *Confirmed* by <@{user_id}> · executing..."}}])
+
+    conv_confirm_plan(thread_ts)
+    t0 = time.time()
+
+    def _progress(msg: str) -> None:
+        post_message(channel_id, msg, thread_ts=thread_ts)
+
+    exec_result = execute_workflow(
+        plan=plan,
+        actor_slack_id=user_id,
+        channel_id=channel_id,
+        message_ts=pending["message_ts"],
+        progress_cb=_progress,
+    )
+
+    elapsed_s = time.time() - t0
+    mark_executed(pending_id)
+    conv_set_state(thread_ts, "DONE")
+
+    # Seed context marker for next op
+    steps = plan.get("steps", [])
+    first_email = next((s.get("target_email", "") for s in steps if s.get("target_email")), "")
+    actions_done = [s.get("action", "") for s in steps if not s.get("pre_confirm")]
+
+    if exec_result.all_succeeded:
+        update_message(channel_id, pending["message_ts"],
+                       f"✅ Workflow complete · {elapsed_s:.1f}s",
+                       blocks=build_execution_complete_card(
+                           exec_result.completed, exec_result.audit_ids, user_id, elapsed_s))
+        _post_to_log_channel(
+            exec_result.audit_ids[0] if exec_result.audit_ids else "none",
+            "+".join(actions_done), first_email, user_id,
+        )
+    else:
+        # Partial failure — write a recovery pending for remaining steps
+        recovery_plan = {"summary": "Retry remaining steps", "steps": exec_result.remaining_steps}
+        if exec_result.remaining_steps:
+            recovery_id = f"jrv_p_{_uuid.uuid4().hex[:8]}"
+            write_pending(
+                actor_slack_id=user_id,
+                intent={"action": "workflow", "plan": recovery_plan, "before_states": {}},
+                before_state={},
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                message_ts=pending["message_ts"],
+                pending_id=recovery_id,
+            )
+        else:
+            recovery_id = ""
+        update_message(
+            channel_id, pending["message_ts"],
+            "⚠️ Workflow partially failed",
+            blocks=build_execution_failure_card(
+                exec_result.completed, exec_result.failed,
+                exec_result.remaining_steps, recovery_id,
+            ),
+        )
 
 
 def handle_block_action(body: dict[str, Any]) -> None:
     """
-    Process Block Kit button actions (✅ Confirm / ❌ Cancel).
-    BUG-1/BUG-2 fix: replaced emoji reaction handling with buttons.
+    Process Block Kit button actions.
+    Handles both legacy confirm_action/cancel_action and new confirm_plan/cancel_plan.
     """
     user_id = body.get("user", {}).get("id", "")
     channel_id = body.get("channel", {}).get("id", "")
@@ -526,6 +662,17 @@ def handle_block_action(body: dict[str, Any]) -> None:
 
     print(f"[BUTTON] {action_id} from {user_id}, pending={pending_id}")
 
+    # ── New workflow plan buttons ─────────────────────────────────────────────
+    if action_id in ("confirm_plan", "cancel_plan"):
+        _handle_plan_button(
+            action_id=action_id,
+            pending_id=pending_id,
+            user_id=user_id,
+            channel_id=channel_id,
+        )
+        return
+
+    # ── Legacy single-action buttons (confirm_action / cancel_action) ─────────
     pending = get_by_pending_id(pending_id)
     if not pending:
         # Card expired or already acted on
