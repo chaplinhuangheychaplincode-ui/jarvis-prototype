@@ -517,14 +517,18 @@ def parse_workflow(
     utterance: str,
     history: list[dict[str, Any]] | None = None,
     model: str = "claude-haiku-4-5",
+    prefetch_email: str = "",
 ) -> dict[str, Any]:
     """
     Initial mode: NL utterance → workflow plan.
     Returns a workflow dict with summary, steps[], needs_clarification, confidence.
+    prefetch_email: already-resolved email from the prefetch step — used as authoritative
+    target_email backfill when the LLM doesn't extract one from the utterance.
     """
     client = _get_client()
     messages: list[Any] = _build_messages(history, utterance)
-    context_email = _extract_context_email(history)
+    # Prefer the prefetch email (already validated) over history scan
+    context_email = prefetch_email or _extract_context_email(history)
 
     response = client.messages.create(
         model=model,

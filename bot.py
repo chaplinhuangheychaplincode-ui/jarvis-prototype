@@ -436,7 +436,8 @@ def _process_utterance(
     # intent == "workflow" — fall through to parse_workflow
 
     # Use new workflow parser
-    plan = parse_workflow(clean_text, history=history[:-1] if len(history) > 1 else None)
+    plan = parse_workflow(clean_text, history=history[:-1] if len(history) > 1 else None,
+                          prefetch_email=raw_email or "")
     print(f"[PLAN] {json.dumps(plan, indent=2)}")
     # Explain / help bypass
     steps = plan.get("steps", [])
