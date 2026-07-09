@@ -276,7 +276,10 @@ def _process_utterance(
 
     # Question intent short-circuit — answer inline without building a workflow plan
     # Works in GATHERING and also catches questions on new @mentions in DONE threads
-    if is_question_intent(clean_text):
+    # EXCEPTION: if the utterance contains an email address, it's an actionable request
+    # (e.g. "how much credits does foo@bar.com have?") — let parse_workflow handle it.
+    _contains_email = bool(__import__("re").search(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", clean_text))
+    if is_question_intent(clean_text) and not _contains_email:
         # Include seed messages (system context / prior op marker) in history for QA
         all_messages = conv["messages"] if conv else []
         # history_for_qa = everything before the current user utterance (last element)
