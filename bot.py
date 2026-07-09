@@ -405,7 +405,8 @@ def _process_utterance(
         if thinking_ts:
             delete_message(channel, thinking_ts)
         post_message(channel, answer, thread_ts=thread_ts)
-        conv_set_state(thread_ts, "DONE")
+        # Keep state as GATHERING so follow-up messages (e.g. "deduct credits from him")
+        # retain the email in conversation history
         return
 
     if intent == "question":
