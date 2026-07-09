@@ -213,6 +213,38 @@ def _extract_email_from_text(text: str) -> str | None:
     return None
 
 
+def _extract_prior_email_from_history(history: list[dict]) -> str | None:
+    """Scan recent user messages in history for the last email mentioned."""
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            email = _extract_email_from_text(msg.get("text", ""))
+            if email:
+                return email
+    return None
+
+
+def _is_bare_email(text: str) -> bool:
+    """Return True if the message is just an email address with no other content."""
+    stripped = text.strip()
+    return bool(re.fullmatch(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", stripped))
+
+
+def _reconstruct_question(current_text: str, history: list[dict]) -> str:
+    """
+    If current_text is a bare email follow-up, find the last user question
+    from history and combine them into a complete question for synthesize_answer.
+    """
+    if not _is_bare_email(current_text):
+        return current_text
+    # Walk back through history to find the last non-email user message
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            prior = msg.get("text", "").strip()
+            if prior and not _is_bare_email(prior):
+                return f"{prior} (for {current_text.strip()})"
+    return current_text
+
+
 def _prefetch_account(email: str) -> dict | None:
     """
     Fetch account state from CMS for prefetch.
@@ -307,9 +339,18 @@ def _process_utterance(
     thinking_resp = post_message(channel, "Thinking...", thread_ts=thread_ts)
     thinking_ts = thinking_resp.get("ts", "")
 
-    # --- Prefetch account context if an email is present (raw text has not been cleaned yet
-    #     of mailto escapes, so run extraction on the original text) ---
+    # Build history_for_qa early — needed for email fallback and classification
+    all_messages = conv["messages"] if conv else []
+    history_for_qa = all_messages[:-1] if len(all_messages) > 1 else (all_messages[:] if all_messages else None)
+
+    # --- Prefetch account context if an email is present ---
+    # Also fall back to last email seen in thread history (handles "does her account expire?")
     raw_email = _extract_email_from_text(clean_text)
+    if not raw_email and history_for_qa:
+        raw_email = _extract_prior_email_from_history(history_for_qa)
+        if raw_email:
+            print(f"[PREFETCH] no email in message, using history email: {raw_email}", flush=True)
+
     account_ctx: dict | None = None
     if raw_email:
         if thinking_ts:
@@ -318,24 +359,24 @@ def _process_utterance(
         print(f"[PREFETCH] {raw_email}: exists={account_ctx.get('user_id') is not None if account_ctx else 'error'}", flush=True)
 
     # LLM-based intent classification — now receives live account data when available
-    all_messages = conv["messages"] if conv else []
-    history_for_qa = all_messages[:-1] if len(all_messages) > 1 else (all_messages[:] if all_messages else None)
     intent = classify_intent(clean_text, history=history_for_qa, account_context=account_ctx)
     print(f"[INTENT] {intent!r} — {clean_text[:80]}", flush=True)
 
     # "answer" — we have live account data and the question can be answered directly
     if intent == "answer":
+        # Reconstruct a full question if the user just sent a bare email as follow-up
+        question_text = _reconstruct_question(clean_text, history_for_qa or [])
         if account_ctx is None:
             # Prefetch failed or no email — fall back to answer_question
-            answer = answer_question(clean_text, history=history_for_qa, current_plan=conv.get("current_plan") if conv else None)
+            answer = answer_question(question_text, history=history_for_qa, current_plan=conv.get("current_plan") if conv else None)
         else:
-            answer = synthesize_answer(clean_text, account_ctx)
+            answer = synthesize_answer(question_text, account_ctx)
             if not answer:
                 # synthesize failed — fallback prose
                 if account_ctx.get("user_id") is None:
                     answer = f"{raw_email} was not found in HeyGen."
                 else:
-                    answer = answer_question(clean_text, history=history_for_qa, current_plan=conv.get("current_plan") if conv else None)
+                    answer = answer_question(question_text, history=history_for_qa, current_plan=conv.get("current_plan") if conv else None)
         conv_append(thread_ts, channel, "assistant", answer)
         if thinking_ts:
             delete_message(channel, thinking_ts)
@@ -344,8 +385,12 @@ def _process_utterance(
         return
 
     if intent == "question":
+        # Even for general questions, if there's a prior email in context + account data,
+        # pass it to answer_question so it can reference live data
         current_plan = conv.get("current_plan") if conv else None
-        answer = answer_question(clean_text, history=history_for_qa, current_plan=current_plan)
+        question_text = _reconstruct_question(clean_text, history_for_qa or [])
+        answer = answer_question(question_text, history=history_for_qa, current_plan=current_plan,
+                                 account_context=account_ctx)
         conv_append(thread_ts, channel, "assistant", answer)
         if thinking_ts:
             delete_message(channel, thinking_ts)

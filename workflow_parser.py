@@ -450,12 +450,16 @@ def answer_question(
     utterance: str,
     history: list[dict[str, Any]] | None = None,
     current_plan: dict[str, Any] | None = None,
+    account_context: dict[str, Any] | None = None,
     model: str = "claude-haiku-4-5",
 ) -> str:
     """
     Answer a question in the context of the current session.
     Returns a plain-English answer string.
+    When account_context is provided, injects live CMS data so the LLM can answer
+    questions about a specific account without saying it can't look things up.
     """
+    import json as _json
     client = _get_client()
 
     messages: list[Any] = []
@@ -475,10 +479,20 @@ def answer_question(
 
     # Inject current plan as context if available
     if current_plan and current_plan.get("steps"):
-        import json as _json
         plan_ctx = f"[Current workflow plan]\n```json\n{_json.dumps(current_plan, indent=2)}\n```"
         messages.append({"role": "user", "content": plan_ctx})
         messages.append({"role": "assistant", "content": "I have the current plan in context."})
+
+    # Inject live account data if available
+    if account_context is not None:
+        if account_context.get("user_id") is not None:
+            ctx_str = _json.dumps(account_context, indent=2, default=str)
+            messages.append({"role": "user", "content": f"[Live account data from CMS]\n```json\n{ctx_str}\n```"})
+            messages.append({"role": "assistant", "content": "I have the live account data in context."})
+        else:
+            email = account_context.get("email", "?")
+            messages.append({"role": "user", "content": f"[Account lookup] {email} was NOT FOUND in HeyGen."})
+            messages.append({"role": "assistant", "content": "Understood — that account does not exist."})
 
     # Add the question
     if not messages or messages[-1].get("content") != utterance:
