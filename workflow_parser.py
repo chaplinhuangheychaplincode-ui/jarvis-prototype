@@ -310,31 +310,36 @@ Jarvis can perform these ACTIONS on HeyGen user accounts:
 - investigate account issues
 
 Classify the user's message into exactly ONE of these intents:
-- "workflow"  — the user wants Jarvis to perform or look up something using the actions above
-- "question"  — a general knowledge or conversational question Jarvis can answer from context/facts (no CMS action needed)
+- "answer"    — user wants to KNOW something about a specific account AND account data is provided below (you can answer directly from it)
+- "workflow"  — user wants to CREATE, MODIFY, or perform WRITE operations (grant, revoke, change tier, deduct, create, investigate, etc.)
+- "question"  — general knowledge or conversational question; no specific account lookup needed
 - "feedback"  — the user is expressing praise or complaint about Jarvis itself
 
 Rules:
-- If the message mentions an email address AND could map to any Jarvis action above → "workflow"
-- "how much credits does X have?" → "workflow" (lookup action)
-- "what tier is X on?" → "workflow" (lookup action)
-- "when do credits expire?" (no email, post-op question) → "question"
+- If account data is provided AND the question asks about that account's state → "answer"
+- If account data shows the user was NOT FOUND and the question is asking about that account → "answer" (you'll explain it doesn't exist)
+- If the user wants to CHANGE something (grant, revoke, change tier, create, deduct) → always "workflow", even if account data is provided
+- "when do credits expire?" (no email, post-op context question) → "question"
 - "what is a generative credit?" → "question"
 - "that was wrong", "great job", "feedback: ..." → "feedback"
 - When in doubt between workflow and question, prefer "workflow"
 
-Respond with ONLY the intent word: workflow, question, or feedback."""
+Respond with ONLY the intent word: answer, workflow, question, or feedback."""
 
 
 def classify_intent(
     utterance: str,
     history: list[dict] | None = None,
+    account_context: dict | None = None,
     model: str = "claude-haiku-4-5",
 ) -> str:
     """
-    LLM-based intent classifier. Returns 'workflow', 'question', or 'feedback'.
+    LLM-based intent classifier. Returns 'answer', 'workflow', 'question', or 'feedback'.
+    When account_context is provided (prefetched CMS data), the LLM can classify 'answer'
+    directly from the live data instead of generating a workflow step.
     Falls back to heuristic if the LLM call fails.
     """
+    import json as _json
     client = _get_client()
     messages: list[Any] = []
 
@@ -347,18 +352,29 @@ def classify_intent(
 
     messages.append({"role": "user", "content": utterance})
 
+    # Build system — inject live account data if available
+    system = _CLASSIFY_SYSTEM
+    if account_context is not None:
+        exists = account_context.get("user_id") is not None
+        if exists:
+            ctx_str = _json.dumps(account_context, indent=2, default=str)
+            system += f"\n\nAccount data (prefetched from CMS):\n```json\n{ctx_str}\n```"
+        else:
+            email = account_context.get("email", "?")
+            system += f"\n\nAccount data: User `{email}` was NOT FOUND in HeyGen (does not exist)."
+
     try:
         resp = client.messages.create(
             model=model,
             max_tokens=10,
             temperature=0,
-            system=_CLASSIFY_SYSTEM,
+            system=system,
             messages=messages,
         )
         for block in resp.content:
             if block.type == "text":
                 result = block.text.strip().lower()
-                if result in ("workflow", "question", "feedback"):
+                if result in ("answer", "workflow", "question", "feedback"):
                     return result
     except Exception as e:
         print(f"[CLASSIFY] LLM failed, falling back to heuristic: {e}", flush=True)
@@ -367,6 +383,12 @@ def classify_intent(
     from feedback_store import is_feedback_intent
     if is_feedback_intent(utterance):
         return "feedback"
+    # If we have account context, lean toward "answer" for question-like utterances
+    if account_context is not None and (
+        utterance.endswith("?") or
+        any(utterance.lower().startswith(w) for w in ("how ", "what ", "when ", "who ", "is ", "does ", "where "))
+    ):
+        return "answer"
     if is_question_intent(utterance):
         return "question"
     return "workflow"

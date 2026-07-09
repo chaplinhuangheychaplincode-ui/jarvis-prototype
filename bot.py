@@ -196,6 +196,39 @@ def _handle_mention_with_timeout(event: dict) -> None:
                 pass
 
 
+def _extract_email_from_text(text: str) -> str | None:
+    """
+    Extract the first email address from text.
+    Handles plain addresses and Slack mailto escapes: <mailto:foo@bar.com|foo@bar.com>
+    Returns None if no email found.
+    """
+    # Slack mailto form first
+    m = re.search(r"<mailto:([^|>]+)\|", text)
+    if m:
+        return m.group(1).strip()
+    # Plain email regex
+    m = re.search(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", text)
+    if m:
+        return m.group(0).strip()
+    return None
+
+
+def _prefetch_account(email: str) -> dict | None:
+    """
+    Fetch account state from CMS for prefetch.
+    Returns None on hard error. Returns dict with user_id=None if account not found.
+    """
+    import concurrent.futures as _cf
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(heygen.get_user_state, email)
+            state = fut.result(timeout=10)
+        return state
+    except Exception as e:
+        print(f"[PREFETCH] {email}: {e}", flush=True)
+        return None
+
+
 def _clean_slack_text(text: str) -> str:
     """Strip Slack mention syntax, mailto escapes, and bare angle-bracket URLs."""
     text = re.sub(r"<@[A-Z0-9]+>", "", text).strip()
@@ -274,12 +307,41 @@ def _process_utterance(
     thinking_resp = post_message(channel, "Thinking...", thread_ts=thread_ts)
     thinking_ts = thinking_resp.get("ts", "")
 
-    # LLM-based intent classification — replaces keyword heuristics
-    # classify_intent() returns 'workflow', 'question', or 'feedback'
+    # --- Prefetch account context if an email is present (raw text has not been cleaned yet
+    #     of mailto escapes, so run extraction on the original text) ---
+    raw_email = _extract_email_from_text(clean_text)
+    account_ctx: dict | None = None
+    if raw_email:
+        if thinking_ts:
+            update_message(channel, thinking_ts, "Looking up account...")
+        account_ctx = _prefetch_account(raw_email)
+        print(f"[PREFETCH] {raw_email}: exists={account_ctx.get('user_id') is not None if account_ctx else 'error'}", flush=True)
+
+    # LLM-based intent classification — now receives live account data when available
     all_messages = conv["messages"] if conv else []
     history_for_qa = all_messages[:-1] if len(all_messages) > 1 else (all_messages[:] if all_messages else None)
-    intent = classify_intent(clean_text, history=history_for_qa)
+    intent = classify_intent(clean_text, history=history_for_qa, account_context=account_ctx)
     print(f"[INTENT] {intent!r} — {clean_text[:80]}", flush=True)
+
+    # "answer" — we have live account data and the question can be answered directly
+    if intent == "answer":
+        if account_ctx is None:
+            # Prefetch failed or no email — fall back to answer_question
+            answer = answer_question(clean_text, history=history_for_qa, current_plan=conv.get("current_plan") if conv else None)
+        else:
+            answer = synthesize_answer(clean_text, account_ctx)
+            if not answer:
+                # synthesize failed — fallback prose
+                if account_ctx.get("user_id") is None:
+                    answer = f"{raw_email} was not found in HeyGen."
+                else:
+                    answer = answer_question(clean_text, history=history_for_qa, current_plan=conv.get("current_plan") if conv else None)
+        conv_append(thread_ts, channel, "assistant", answer)
+        if thinking_ts:
+            delete_message(channel, thinking_ts)
+        post_message(channel, answer, thread_ts=thread_ts)
+        conv_set_state(thread_ts, "DONE")
+        return
 
     if intent == "question":
         current_plan = conv.get("current_plan") if conv else None
@@ -329,7 +391,6 @@ def _process_utterance(
     # Use new workflow parser
     plan = parse_workflow(clean_text, history=history[:-1] if len(history) > 1 else None)
     print(f"[PLAN] {json.dumps(plan, indent=2)}")
-
     # Explain / help bypass
     steps = plan.get("steps", [])
     if steps and steps[0].get("action") == "explain":
@@ -393,68 +454,34 @@ def _process_utterance(
         post_message(channel, question, thread_ts=thread_ts, blocks=blocks)
         return
 
-    # Fast-execute path: all steps read-only + high confidence → skip HITL entirely
-    all_read_only = all(s.get("action") in READ_ONLY_ACTIONS for s in steps)
-    if all_read_only and plan.get("confidence", 0) >= AUTO_EXECUTE_CONFIDENCE:
-        if thinking_ts:
-            update_message(channel, thinking_ts, "Looking up...")
-        print(f"[AUTO_EXEC] read-only plan, confidence={plan.get('confidence'):.2f} — skipping HITL")
-        exec_result = execute_workflow(
-            plan=plan,
-            actor_slack_id=user_id,
-            channel_id=channel,
-            message_ts=thinking_ts,
-        )
-        if thinking_ts:
-            delete_message(channel, thinking_ts)
-        if exec_result.completed:
-            # If the original utterance was question-phrased, synthesize a targeted answer
-            # instead of dumping the raw account card
-            _is_question_phrased = clean_text.endswith("?") or intent == "question" or \
-                any(clean_text.lower().startswith(w) for w in (
-                    "how ", "what ", "when ", "which ", "who ", "where ", "how much", "how many",
-                ))
-            if _is_question_phrased:
-                # Merge all step results into one flat dict for the synthesizer
-                merged_data: dict[str, Any] = {}
-                for sr in exec_result.completed:
-                    if isinstance(sr.result, dict):
-                        merged_data.update(sr.result)
-                synthesized = synthesize_answer(clean_text, merged_data)
-                if synthesized:
-                    post_message(channel, synthesized, thread_ts=thread_ts)
-                    conv_set_state(thread_ts, "DONE")
-                    return
-            # Non-question lookup or synthesize failed — fall back to raw card
-            blocks = build_execution_complete_card(exec_result.completed, exec_result.audit_ids, user_id, 0)
-            post_message(channel, "Here's what I found:", thread_ts=thread_ts, blocks=blocks)
-        else:
-            post_message(channel, "Lookup failed — user may not exist or there was a CMS error.",
-                         thread_ts=thread_ts)
-        conv_set_state(thread_ts, "DONE")
-        return
-
     # Run pre-confirm steps (read-only, no HITL)
+    # If we already prefetched account_ctx for this email, reuse it — no extra CMS call
     pre_steps = [s for s in steps if s.get("pre_confirm")]
     before_states: dict[str, Any] = {}
     if pre_steps:
-        if thinking_ts:
-            update_message(channel, thinking_ts, "Fetching account info...")
         for pre_step in pre_steps:
             email = pre_step.get("target_email", "")
-            try:
-                state = heygen.get_user_state(email)
-                before_states[email] = state
-                if state.get("user_id") is None:
-                    if thinking_ts:
-                        delete_message(channel, thinking_ts)
-                    post_message(channel,
-                                 f"User `{email}` not found in HeyGen. Check the email and try again.",
-                                 thread_ts=thread_ts)
-                    conv_set_state(thread_ts, "DONE")
-                    return
-            except Exception as e:
-                print(f"[PRE_CONFIRM] {e}", flush=True)
+            # Reuse prefetched data if available for this email
+            if account_ctx is not None and email and email == raw_email:
+                state = account_ctx
+                print(f"[PRE_CONFIRM] reusing prefetched state for {email}", flush=True)
+            else:
+                if thinking_ts:
+                    update_message(channel, thinking_ts, "Fetching account info...")
+                try:
+                    state = heygen.get_user_state(email)
+                except Exception as e:
+                    print(f"[PRE_CONFIRM] {e}", flush=True)
+                    state = {"user_id": None, "email": email}
+            before_states[email] = state
+            if state.get("user_id") is None:
+                if thinking_ts:
+                    delete_message(channel, thinking_ts)
+                post_message(channel,
+                             f"User `{email}` not found in HeyGen. Check the email and try again.",
+                             thread_ts=thread_ts)
+                conv_set_state(thread_ts, "DONE")
+                return
 
     # Transition to PLANNING — store plan, post plan card
     pending_id = f"jrv_p_{_uuid.uuid4().hex[:8]}"
