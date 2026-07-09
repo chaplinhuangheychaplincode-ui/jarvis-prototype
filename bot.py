@@ -398,12 +398,14 @@ def _process_utterance(
                 update_message(channel, thinking_ts, "Looking up account...")
             account_ctx = _prefetch_account(raw_email)
             print(f"[PREFETCH] {raw_email}: exists={account_ctx.get('user_id') is not None if account_ctx else 'error'}", flush=True)
-            # Persist to conversation so all subsequent turns in this thread have it
-            if account_ctx and conv:
+            # Persist to conversation so all subsequent turns in this thread have it.
+            # Use conv if it exists, else fall back to defaults (first message in thread).
+            if account_ctx:
                 upsert_conversation(thread_ts, channel, history,
-                                    state=conv.get("state", "GATHERING"),
-                                    current_plan=conv.get("current_plan"),
+                                    state=conv.get("state", "GATHERING") if conv else "GATHERING",
+                                    current_plan=conv.get("current_plan") if conv else None,
                                     account_context=account_ctx)
+                print(f"[PREFETCH] stored account_ctx for {raw_email} in thread {thread_ts}", flush=True)
 
     # LLM-based intent classification — now receives live account data when available
     intent = classify_intent(clean_text, history=history_for_qa, account_context=account_ctx)
