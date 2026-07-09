@@ -363,12 +363,24 @@ def _process_utterance(
     history_for_qa = all_messages[:-1] if len(all_messages) > 1 else (all_messages[:] if all_messages else None)
 
     # --- Prefetch account context if an email is present ---
-    # Fallback chain: (1) email in message, (2) email in our history, (3) fetch from Slack thread directly
+    # Fallback chain: (1) email in message, (2) email in our history,
+    # (3) stored account_context from a prior turn in this thread,
+    # (4) fetch from Slack thread directly (last resort, requires scope)
     raw_email = _extract_email_from_text(clean_text)
     if not raw_email and history_for_qa:
         raw_email = _extract_prior_email_from_history(history_for_qa)
         if raw_email:
             print(f"[PREFETCH] no email in message, using history email: {raw_email}", flush=True)
+
+    # Restore stored account context from a prior turn — even if we find an email above,
+    # we may reuse this to avoid a redundant CMS call for the same email
+    stored_account_ctx: dict | None = conv.get("account_context") if conv else None
+    stored_email: str | None = stored_account_ctx.get("email") if stored_account_ctx else None
+
+    if not raw_email and stored_email:
+        raw_email = stored_email
+        print(f"[PREFETCH] no email found anywhere, restoring stored ctx for: {raw_email}", flush=True)
+
     if not raw_email:
         # Last resort: fetch the actual Slack thread and scan all messages
         raw_email = _fetch_email_from_slack_thread(channel, thread_ts)
@@ -377,10 +389,21 @@ def _process_utterance(
 
     account_ctx: dict | None = None
     if raw_email:
-        if thinking_ts:
-            update_message(channel, thinking_ts, "Looking up account...")
-        account_ctx = _prefetch_account(raw_email)
-        print(f"[PREFETCH] {raw_email}: exists={account_ctx.get('user_id') is not None if account_ctx else 'error'}", flush=True)
+        # Reuse stored context if it's for the same email — skip redundant CMS call
+        if stored_account_ctx and stored_email == raw_email:
+            account_ctx = stored_account_ctx
+            print(f"[PREFETCH] reusing stored account_ctx for: {raw_email}", flush=True)
+        else:
+            if thinking_ts:
+                update_message(channel, thinking_ts, "Looking up account...")
+            account_ctx = _prefetch_account(raw_email)
+            print(f"[PREFETCH] {raw_email}: exists={account_ctx.get('user_id') is not None if account_ctx else 'error'}", flush=True)
+            # Persist to conversation so all subsequent turns in this thread have it
+            if account_ctx and conv:
+                upsert_conversation(thread_ts, channel, history,
+                                    state=conv.get("state", "GATHERING"),
+                                    current_plan=conv.get("current_plan"),
+                                    account_context=account_ctx)
 
     # LLM-based intent classification — now receives live account data when available
     intent = classify_intent(clean_text, history=history_for_qa, account_context=account_ctx)

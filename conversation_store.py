@@ -43,6 +43,7 @@ def _conn() -> sqlite3.Connection:
             current_plan    TEXT,
             final_plan      TEXT,
             plan_card_ts    TEXT,
+            account_context TEXT,
             created_at      TEXT NOT NULL,
             expires_at      TEXT NOT NULL
         )
@@ -52,6 +53,7 @@ def _conn() -> sqlite3.Connection:
         ("current_plan", "TEXT"),
         ("final_plan", "TEXT"),
         ("plan_card_ts", "TEXT"),
+        ("account_context", "TEXT"),
     ]:
         try:
             conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {typedef}")
@@ -75,6 +77,7 @@ def upsert_conversation(
     current_plan: dict[str, Any] | None = None,
     final_plan: dict[str, Any] | None = None,
     plan_card_ts: str | None = None,
+    account_context: dict[str, Any] | None = None,
 ) -> None:
     """Create or update a conversation row, refreshing TTL."""
     now = datetime.now(timezone.utc).isoformat()
@@ -83,16 +86,17 @@ def upsert_conversation(
     conn.execute("""
         INSERT INTO conversations
             (thread_ts, channel_id, state, messages_json, final_intent,
-             current_plan, final_plan, plan_card_ts, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             current_plan, final_plan, plan_card_ts, account_context, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(thread_ts) DO UPDATE SET
-            state         = excluded.state,
-            messages_json = excluded.messages_json,
-            final_intent  = excluded.final_intent,
-            current_plan  = excluded.current_plan,
-            final_plan    = excluded.final_plan,
-            plan_card_ts  = COALESCE(excluded.plan_card_ts, conversations.plan_card_ts),
-            expires_at    = excluded.expires_at
+            state           = excluded.state,
+            messages_json   = excluded.messages_json,
+            final_intent    = excluded.final_intent,
+            current_plan    = excluded.current_plan,
+            final_plan      = excluded.final_plan,
+            plan_card_ts    = COALESCE(excluded.plan_card_ts, conversations.plan_card_ts),
+            account_context = COALESCE(excluded.account_context, conversations.account_context),
+            expires_at      = excluded.expires_at
     """, (
         thread_ts, channel_id, state,
         json.dumps(messages),
@@ -100,6 +104,7 @@ def upsert_conversation(
         json.dumps(current_plan) if current_plan is not None else None,
         json.dumps(final_plan) if final_plan is not None else None,
         plan_card_ts,
+        json.dumps(account_context) if account_context is not None else None,
         now, expires,
     ))
     conn.commit()
@@ -189,6 +194,7 @@ def get_conversation(thread_ts: str) -> dict[str, Any] | None:
     d["final_intent"] = json.loads(d["final_intent"]) if d.get("final_intent") else None
     d["current_plan"] = json.loads(d["current_plan"]) if d.get("current_plan") else None
     d["final_plan"] = json.loads(d["final_plan"]) if d.get("final_plan") else None
+    d["account_context"] = json.loads(d["account_context"]) if d.get("account_context") else None
     return d
 
 
