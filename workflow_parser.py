@@ -257,7 +257,7 @@ HeyGen platform facts you know:
 - Passwords: only visible at account creation time — not retrievable afterward. User must use password reset.
 - Production vs dev: bot in dev channel operates on cms-api-dev (sandbox). Prod bot on cms-api (production).
 
-Be helpful, factual, and brief. If you don't know something specific (e.g. exact account balance), say so and offer to look it up."""
+Be helpful, factual, and brief. Jarvis has direct CMS access — never say you cannot look up account data. If account data isn't in the current context, offer to fetch it."""
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -371,6 +371,57 @@ def classify_intent(
         return "question"
     return "workflow"
 
+
+
+_SYNTHESIZE_SYSTEM = """\
+You are Jarvis, HeyGen's internal ops assistant. You just fetched live account data from the CMS.
+
+Answer the user's original question directly and concisely using ONLY the data provided.
+- Lead with the specific answer, not a preamble
+- Use plain prose (no bullet lists unless there are 3+ items to enumerate)
+- Include relevant expiry dates, quota IDs, or tier names when they add value
+- If the data doesn't contain what was asked, say exactly what IS there and note what's missing
+- Keep it under 3 sentences
+
+Examples:
+Q: "how much generative credits does foo@bar.com have?"
+A: "foo@bar.com has 1,250 generative credits, expiring Aug 5 (quota abc123)."
+
+Q: "what tier is foo@bar.com on?"
+A: "foo@bar.com is on the Pro tier."
+
+Q: "when does foo@bar.com's subscription expire?"
+A: "The Pro subscription expires Sep 1, 2026 (granted as trial)."
+"""
+
+
+def synthesize_answer(
+    original_question: str,
+    cms_data: dict,
+    model: str = "claude-haiku-4-5",
+) -> str:
+    """
+    Given the original question and raw CMS account data, synthesize a direct answer.
+    Used after a read-only auto-execute to avoid dumping raw card data.
+    """
+    import json as _json
+    client = _get_client()
+    data_summary = _json.dumps(cms_data, indent=2, default=str)
+    prompt = f"Account data:\n```json\n{data_summary}\n```\n\nUser question: {original_question}"
+    try:
+        resp = client.messages.create(
+            model=model,
+            max_tokens=200,
+            temperature=0,
+            system=_SYNTHESIZE_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        for block in resp.content:
+            if block.type == "text":
+                return block.text.strip()
+    except Exception as e:
+        print(f"[SYNTHESIZE] failed: {e}", flush=True)
+    return ""  # caller falls back to raw card on empty
 
 
 def answer_question(

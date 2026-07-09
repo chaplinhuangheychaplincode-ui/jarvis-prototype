@@ -49,7 +49,7 @@ from slack_client import (
 )
 import heygen_cms_api as heygen
 from investigator import investigate as run_investigation
-from workflow_parser import parse_workflow, refine_workflow, answer_question, is_question_intent, classify_intent
+from workflow_parser import parse_workflow, refine_workflow, answer_question, is_question_intent, classify_intent, synthesize_answer
 from workflow_executor import execute_workflow
 from conversation_store import (
     upsert_conversation, append_message as conv_append, get_conversation,
@@ -408,6 +408,24 @@ def _process_utterance(
         if thinking_ts:
             delete_message(channel, thinking_ts)
         if exec_result.completed:
+            # If the original utterance was question-phrased, synthesize a targeted answer
+            # instead of dumping the raw account card
+            _is_question_phrased = clean_text.endswith("?") or intent == "question" or \
+                any(clean_text.lower().startswith(w) for w in (
+                    "how ", "what ", "when ", "which ", "who ", "where ", "how much", "how many",
+                ))
+            if _is_question_phrased:
+                # Merge all step results into one flat dict for the synthesizer
+                merged_data: dict[str, Any] = {}
+                for sr in exec_result.completed:
+                    if isinstance(sr.result, dict):
+                        merged_data.update(sr.result)
+                synthesized = synthesize_answer(clean_text, merged_data)
+                if synthesized:
+                    post_message(channel, synthesized, thread_ts=thread_ts)
+                    conv_set_state(thread_ts, "DONE")
+                    return
+            # Non-question lookup or synthesize failed — fall back to raw card
             blocks = build_execution_complete_card(exec_result.completed, exec_result.audit_ids, user_id, 0)
             post_message(channel, "Here's what I found:", thread_ts=thread_ts, blocks=blocks)
         else:
