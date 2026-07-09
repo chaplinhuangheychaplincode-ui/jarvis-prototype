@@ -95,7 +95,9 @@ def upsert_conversation(
             current_plan    = excluded.current_plan,
             final_plan      = excluded.final_plan,
             plan_card_ts    = COALESCE(excluded.plan_card_ts, conversations.plan_card_ts),
-            account_context = COALESCE(excluded.account_context, conversations.account_context),
+            account_context = CASE WHEN excluded.account_context IS NOT NULL
+                              THEN excluded.account_context
+                              ELSE conversations.account_context END,
             expires_at      = excluded.expires_at
     """, (
         thread_ts, channel_id, state,
