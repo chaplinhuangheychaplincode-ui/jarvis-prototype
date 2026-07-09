@@ -430,6 +430,22 @@ def _process_utterance(
         conv_set_state(thread_ts, "DONE")
         return
 
+    # Prefetch guard: catch conflicts before showing a HITL card
+    # create_account on an existing account → tell the user immediately
+    if account_ctx is not None and account_ctx.get("user_id") is not None:
+        plan_actions = {s.get("action") for s in steps}
+        if "create_account" in plan_actions:
+            msg = (
+                f"{_slack_email(raw_email)} already exists in HeyGen "
+                f"(tier: {account_ctx.get('tier', 'unknown')}). "
+                f"Did you mean to update their account instead?"
+            )
+            if thinking_ts:
+                delete_message(channel, thinking_ts)
+            post_message(channel, msg, thread_ts=thread_ts)
+            conv_set_state(thread_ts, "DONE")
+            return
+
     # Clarification needed — or silent empty plan (fall back to Q&A)
     if plan.get("needs_clarification") or plan.get("confidence", 0) < CONFIDENCE_THRESHOLD or not steps:
         # If steps is empty and no clarification question, it's likely a question/unknown intent
