@@ -262,20 +262,31 @@ def _reconstruct_question(current_text: str, history: list[dict]) -> str:
     return current_text
 
 
-def _prefetch_account(email: str) -> dict | None:
+def _prefetch_account(email: str, retries: int = 3, retry_delay: float = 2.0) -> dict | None:
     """
     Fetch account state from CMS for prefetch.
-    Returns None on hard error. Returns dict with user_id=None if account not found.
+    Returns None on hard error. Returns dict with user_id=None if account not found
+    after all retries (covers propagation lag after create_account).
     """
     import concurrent.futures as _cf
-    try:
-        with _cf.ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(heygen.get_user_state, email)
-            state = fut.result(timeout=10)
-        return state
-    except Exception as e:
-        print(f"[PREFETCH] {email}: {e}", flush=True)
-        return None
+    for attempt in range(retries):
+        try:
+            with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(heygen.get_user_state, email)
+                state = fut.result(timeout=10)
+            if state and state.get("user_id"):
+                return state
+            # user_id=None → account not found; retry if we have attempts left
+            if attempt < retries - 1:
+                print(f"[PREFETCH] {email}: not found (attempt {attempt+1}/{retries}), retrying in {retry_delay}s", flush=True)
+                time.sleep(retry_delay)
+            else:
+                print(f"[PREFETCH] {email}: not found after {retries} attempts", flush=True)
+                return state
+        except Exception as e:
+            print(f"[PREFETCH] {email}: {e}", flush=True)
+            return None
+    return None
 
 
 def _clean_slack_text(text: str) -> str:
@@ -390,7 +401,7 @@ def _process_utterance(
     account_ctx: dict | None = None
     if raw_email:
         # Reuse stored context if it's for the same email — skip redundant CMS call
-        if stored_account_ctx and stored_email == raw_email:
+        if stored_account_ctx and stored_email == raw_email and stored_account_ctx.get("user_id"):
             account_ctx = stored_account_ctx
             print(f"[PREFETCH] reusing stored account_ctx for: {raw_email}", flush=True)
         else:
