@@ -428,6 +428,39 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
         fields.append({"type": "mrkdwn", "text": f"*Created:*\n`{after.get('created', False)}`"})
         if after.get("tier"):
             fields.append({"type": "mrkdwn", "text": f"*Tier:*\n`{after['tier']}`"})
+    elif action in ("get_info", "lookup"):
+        # Account lookup — show the fields users actually care about
+        if after.get("tier"):
+            fields.append({"type": "mrkdwn", "text": f"*Tier:*\n`{after['tier']}`"})
+        if after.get("email"):
+            fields.append({"type": "mrkdwn", "text": f"*Email:*\n`{_slack_email(after['email'])}`"})
+        if after.get("user_id"):
+            fields.append({"type": "mrkdwn", "text": f"*User ID:*\n`{after['user_id']}`"})
+        if after.get("space_id"):
+            fields.append({"type": "mrkdwn", "text": f"*Space ID:*\n`{after['space_id']}`"})
+        # Credits / quotas — quotas from user.get is {"feature": int_amount, ...}
+        quotas = after.get("quotas") or {}
+        if isinstance(quotas, dict) and quotas:
+            for feat, val in list(quotas.items())[:5]:
+                if isinstance(val, (int, float)):
+                    fields.append({"type": "mrkdwn", "text": f"*{feat}:*\n`{int(val):,}`"})
+                elif isinstance(val, list):
+                    for grant in val[:2]:
+                        amt = grant.get("amount") or grant.get("quota") or grant.get("remaining", "?")
+                        exp = grant.get("expires") or grant.get("expire_at") or ""
+                        exp_str = f" · exp {exp[:10]}" if exp else ""
+                        fields.append({"type": "mrkdwn", "text": f"*{feat}:*\n`{amt}{exp_str}`"})
+                elif isinstance(val, dict):
+                    amt = val.get("amount") or val.get("quota") or val.get("remaining", "?")
+                    fields.append({"type": "mrkdwn", "text": f"*{feat}:*\n`{amt}`"})
+        elif after.get("credits") is not None:
+            fields.append({"type": "mrkdwn", "text": f"*Credits:*\n`{after['credits']:,}`"})
+        # Subscription
+        sub = after.get("subscription") or after.get("plan") or {}
+        if isinstance(sub, dict) and sub.get("plan"):
+            exp = sub.get("end_date") or sub.get("expires") or ""
+            exp_str = f" · exp {exp[:10]}" if exp else ""
+            fields.append({"type": "mrkdwn", "text": f"*Subscription:*\n`{sub['plan']}{exp_str}`"})
     elif action == "reduce_grant":
         feature = after.get("feature", "")
         fields.append({"type": "mrkdwn", "text": f"*Credit type:*\n`{feature}`"})
