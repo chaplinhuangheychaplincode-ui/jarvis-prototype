@@ -213,6 +213,23 @@ def _extract_email_from_text(text: str) -> str | None:
     return None
 
 
+def _fetch_email_from_slack_thread(channel: str, thread_ts: str) -> str | None:
+    """
+    Fetch the actual Slack thread and scan all messages for the most recent email.
+    This is the definitive fallback — works even when our internal conv history is stale/empty.
+    """
+    from slack_client import fetch_thread_messages
+    msgs = fetch_thread_messages(channel, thread_ts, limit=50)
+    # Scan in reverse (newest first) to get the most recent email
+    for msg in reversed(msgs):
+        text = msg.get("text", "")
+        email = _extract_email_from_text(text)
+        if email:
+            print(f"[THREAD_SCAN] found email in Slack thread: {email}", flush=True)
+            return email
+    return None
+
+
 def _extract_prior_email_from_history(history: list[dict]) -> str | None:
     """Scan recent user messages in history for the last email mentioned."""
     for msg in reversed(history):
@@ -346,12 +363,17 @@ def _process_utterance(
     history_for_qa = all_messages[:-1] if len(all_messages) > 1 else (all_messages[:] if all_messages else None)
 
     # --- Prefetch account context if an email is present ---
-    # Also fall back to last email seen in thread history (handles "does her account expire?")
+    # Fallback chain: (1) email in message, (2) email in our history, (3) fetch from Slack thread directly
     raw_email = _extract_email_from_text(clean_text)
     if not raw_email and history_for_qa:
         raw_email = _extract_prior_email_from_history(history_for_qa)
         if raw_email:
             print(f"[PREFETCH] no email in message, using history email: {raw_email}", flush=True)
+    if not raw_email:
+        # Last resort: fetch the actual Slack thread and scan all messages
+        raw_email = _fetch_email_from_slack_thread(channel, thread_ts)
+        if raw_email:
+            print(f"[PREFETCH] no email in history, found in Slack thread: {raw_email}", flush=True)
 
     account_ctx: dict | None = None
     if raw_email:

@@ -72,6 +72,20 @@ def delete_message(channel: str, ts: str) -> dict[str, Any]:
     return _call("chat.delete", {"channel": channel, "ts": ts})
 
 
+def fetch_thread_messages(channel: str, thread_ts: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Fetch all messages in a Slack thread via conversations.replies.
+    Returns list of message dicts (newest first is NOT guaranteed — Slack returns chronological)."""
+    try:
+        resp = _call("conversations.replies", {
+            "channel": channel,
+            "ts": thread_ts,
+            "limit": limit,
+        })
+        return resp.get("messages", [])
+    except Exception:
+        return []
+
+
 def get_user_info(user_id: str) -> dict[str, Any]:
     token = _bot_token()
     url = f"https://slack.com/api/users.info?user={user_id}"
