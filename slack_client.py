@@ -3,7 +3,7 @@ Jarvis Slack client — thin wrapper over the Slack Web API.
 Handles posting Block Kit confirmation cards and reading thread context.
 
 Confirmation flow uses Block Kit interactive buttons (not emoji reactions):
-  ✅ Confirm  /  ❌ Cancel
+   Confirm  /   Cancel
 This fixes BUG-1 and BUG-2 — reactions are lossy and anyone can react.
 """
 from __future__ import annotations
@@ -68,7 +68,7 @@ def update_message(channel: str, ts: str, text: str, blocks: list | None = None)
 
 
 def delete_message(channel: str, ts: str) -> dict[str, Any]:
-    """Delete a message (e.g. the ⏳ Thinking... placeholder) cleanly."""
+    """Delete a message (e.g. the  Thinking... placeholder) cleanly."""
     return _call("chat.delete", {"channel": channel, "ts": ts})
 
 
@@ -99,10 +99,10 @@ def build_bulk_confirmation_card(intent: dict[str, Any], pending_id: str) -> lis
         grant_parts.append(f"*Credits:* {credits:,} {product}")
     if days:
         grant_parts.append(f"*Duration:* {days}d")
-    grant_str = " · ".join(grant_parts) if grant_parts else "_no grant details_"
+    grant_str = "·".join(grant_parts) if grant_parts else "_no grant details_"
 
     # Recipient preview (show first 5, then "+N more")
-    preview = ", ".join(f"`{e}`" for e in emails[:5])
+    preview = ",".join(f"`{e}`" for e in emails[:5])
     if n > 5:
         preview += f" … +{n - 5} more"
 
@@ -157,7 +157,7 @@ def build_bulk_confirmation_card(intent: dict[str, Any], pending_id: str) -> lis
             },
             {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "❌ Cancel", "emoji": True},
+                "text": {"type": "plain_text", "text": "Cancel", "emoji": True},
                 "style": "danger",
                 "value": pending_id,
                 "action_id": "cancel_action",
@@ -169,7 +169,7 @@ def build_bulk_confirmation_card(intent: dict[str, Any], pending_id: str) -> lis
 
 def build_confirmation_card(intent: dict[str, Any], before_state: dict[str, Any],
                              pending_id: str) -> list[dict[str, Any]]:
-    """Build a Block Kit confirmation card with interactive ✅/❌ buttons."""
+    """Build a Block Kit confirmation card with interactive / buttons."""
     action = intent.get("action", "unknown")
     target = intent.get("target_email", "unknown")
     confidence = intent.get("confidence", 0)
@@ -227,14 +227,14 @@ def build_confirmation_card(intent: dict[str, Any], before_state: dict[str, Any]
         "elements": [
             {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "✅ Confirm", "emoji": True},
+                "text": {"type": "plain_text", "text": "Confirm", "emoji": True},
                 "style": "primary",
                 "value": pending_id,
                 "action_id": "confirm_action",
             },
             {
                 "type": "button",
-                "text": {"type": "plain_text", "text": "❌ Cancel", "emoji": True},
+                "text": {"type": "plain_text", "text": "Cancel", "emoji": True},
                 "style": "danger",
                 "value": pending_id,
                 "action_id": "cancel_action",
@@ -289,7 +289,7 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
             pin_parts = [f"*{k}:* `{after_state[k]}`" for k in pinned_top]
             blocks.append({
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "📌 *Requested:* " + " · ".join(pin_parts)},
+                "text": {"type": "mrkdwn", "text": "*Requested:*" + "·".join(pin_parts)},
             })
         lookup_fields = after_state.get("_lookup_fields", [])
         quotas = after_state.get("quotas", {})
@@ -304,8 +304,8 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
                         if exp:
                             s += f" (exp {str(exp)[:10]})"
                         return s
-                    rem = val.get("remaining", val.get("remain", "?"))
-                    tot = val.get("total", val.get("limit", "?"))
+                    rem = val.get("remaining", val.get("remain", ""))
+                    tot = val.get("total", val.get("limit", ""))
                     exp = val.get("expire_at") or val.get("expired_at") or val.get("expires", "")
                     s = f"{rem} / {tot}"
                     if exp:
@@ -323,7 +323,7 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
                 pin_parts = [f"*{k}:* `{_fmt_quota(quotas[k])}`" for k in pinned_keys]
                 blocks.append({
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": "📌 *Requested:* " + " · ".join(pin_parts)},
+                    "text": {"type": "mrkdwn", "text": "*Requested:*" + "·".join(pin_parts)},
                 })
 
             quota_parts = [f"`{k}`: {_fmt_quota(quotas[k])}" for k in other_keys[:8]]
@@ -332,7 +332,7 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
             if quota_parts:
                 blocks.append({
                     "type": "context",
-                    "elements": [{"type": "mrkdwn", "text": "📊 Quotas: " + " · ".join(quota_parts)}],
+                    "elements": [{"type": "mrkdwn", "text": "Quotas:" + "·".join(quota_parts)}],
                 })
         blocks.append({
             "type": "context",
@@ -344,7 +344,7 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": "✅ Jarvis — Done", "emoji": True},
+            "text": {"type": "plain_text", "text": "Jarvis — Done", "emoji": True},
         },
         {"type": "divider"},
     ]
@@ -370,7 +370,7 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
 
         def _fmt_q(v: Any) -> str:
             if isinstance(v, dict):
-                amt = v.get("amount", "?")
+                amt = v.get("amount", "")
                 exp = v.get("expire_at") or v.get("expires", "")
                 return f"{amt}" + (f"  exp {str(exp)[:10]}" if exp else "")
             return str(v)
@@ -381,7 +381,7 @@ def build_audit_ack_card(audit_id: str, action: str, target: str,
             b_str = _fmt_q(b) if b is not None else "—"
             a_str = _fmt_q(a) if a is not None else "—"
             changed = b_str != a_str
-            marker = "* " if changed else "  "
+            marker = "*" if changed else ""
             diff_lines.append(f"{marker}{k}: {b_str} → {a_str}" if changed else f"{marker}{k}: {b_str}")
 
         if diff_lines:
@@ -429,9 +429,9 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
         if after.get("tier"):
             fields.append({"type": "mrkdwn", "text": f"*Tier:*\n`{after['tier']}`"})
     elif action == "reduce_grant":
-        feature = after.get("feature", "?")
+        feature = after.get("feature", "")
         fields.append({"type": "mrkdwn", "text": f"*Credit type:*\n`{feature}`"})
-        fields.append({"type": "mrkdwn", "text": f"*Amount deducted:*\n`{after.get('amount_deducted', '?'):,}`"})
+        fields.append({"type": "mrkdwn", "text": f"*Amount deducted:*\n`{after.get('amount_deducted', ''):,}`"})
         fields.append({"type": "mrkdwn", "text": f"*Success:*\n`{after.get('deducted', False)}`"})
     elif action == "revoke_grant":
         revoke_type = after.get("revoke_type", "subscription")
@@ -443,7 +443,7 @@ def _format_ack_fields(action: str, target: str, after: dict[str, Any]) -> list[
         if quota_result:
             ok = quota_result.get("expired", False)
             fields.append({"type": "mrkdwn", "text": f"*Quota expired:*\n`{ok}`"})
-            fields.append({"type": "mrkdwn", "text": f"*Quota ID:*\n`{after.get('quota_id', '?')}`"})
+            fields.append({"type": "mrkdwn", "text": f"*Quota ID:*\n`{after.get('quota_id', '')}`"})
     return fields
 
 
@@ -469,7 +469,7 @@ def _normalize_product_client(product: str | None) -> str:
 def _format_request_body(intent: dict[str, Any]) -> str:
     """Return the exact endpoint + JSON body that will be POSTed to CMS."""
     action = intent.get("action")
-    email = intent.get("target_email", "?")
+    email = intent.get("target_email", "")
 
     if action == "quota_grant":
         tier = intent.get("tier", "")
@@ -558,7 +558,7 @@ def _format_request_body(intent: dict[str, Any]) -> str:
 
     elif action == "reduce_grant":
         product = intent.get("product", "generative_credit")
-        credits = intent.get("credits", "?")
+        credits = intent.get("credits", "")
         # All fields per DeductGiftQuotaRequest
         body = {
             "email": email,       # required
@@ -572,7 +572,7 @@ def _format_request_body(intent: dict[str, Any]) -> str:
 
 def _format_action_summary(intent: dict[str, Any], before: dict[str, Any]) -> str:
     action = intent.get("action")
-    target = intent.get("target_email", "?")
+    target = intent.get("target_email", "")
 
     if action == "quota_grant":
         tier = intent.get("tier", "")
@@ -586,7 +586,7 @@ def _format_action_summary(intent: dict[str, Any], before: dict[str, Any]) -> st
             parts.append(f"{product} → *{credits:,}*" if isinstance(credits, int) else f"{product} → *{credits}*")
         if days:
             parts.append(f"duration → *{days}d*")
-        change_str = " · ".join(parts) if parts else "no changes parsed"
+        change_str = "·".join(parts) if parts else "no changes parsed"
         return f"*Quota Grant* for `{target}`\n{change_str}"
 
     elif action == "create_account":
@@ -605,16 +605,16 @@ def _format_action_summary(intent: dict[str, Any], before: dict[str, Any]) -> st
 
     elif action == "reduce_grant":
         product = intent.get("product", "generative_credit")
-        credits = intent.get("credits", "?")
+        credits = intent.get("credits", "")
         amt = f"{credits:,}" if isinstance(credits, int) else str(credits)
         return f"*Reduce Grant* for `{target}` · deduct *{amt}* `{product}`"
 
     elif action == "ent_sub_grant":
-        ae = intent.get("ae_attribution", "?")
+        ae = intent.get("ae_attribution", "")
         return f"*Enterprise Sub Grant* for `{target}` · AE: *{ae}*"
 
     elif action == "bulk_grant":
-        count = intent.get("user_count", "?")
+        count = intent.get("user_count", "")
         return f"*Bulk Grant* — *{count}* users"
 
     return f"*{action}* for `{target}`"
@@ -636,10 +636,10 @@ def _build_diff_blocks(intent: dict[str, Any], before: dict[str, Any]) -> list[d
         quotas = before.get("quotas", {})
         if quotas and isinstance(quotas, dict):
             for k, v in quotas.items():
-                amt = v.get("amount", "?") if isinstance(v, dict) else v
+                amt = v.get("amount", "") if isinstance(v, dict) else v
                 exp_raw = (v.get("expire_at") or v.get("expires", "")) if isinstance(v, dict) else ""
                 exp_str = f"  exp {str(exp_raw)[:10]}" if exp_raw else ""
-                marker = "→ " if k == target_product else "  "
+                marker = "→" if k == target_product else ""
                 lines.append(f"{marker}{k}: {amt}{exp_str}")
         if lines:
             text = "Before:\n" + "\n".join(lines)
@@ -674,18 +674,18 @@ def build_investigation_card(
     """
     Build a Block Kit card for an investigation result.
 
-    Each proposed action gets a ✅ button that maps to a pre-written pending_id.
+    Each proposed action gets a  button that maps to a pre-written pending_id.
     The caller is responsible for writing those pendings to the store before
     posting this card, so the button handler can find them immediately.
 
     Args:
         result: InvestigationResult instance from investigator.py
         pending_ids: list of pending_ids, one per proposed_action (same order)
-    """
+   """
     blocks: list[dict[str, Any]] = []
 
     # Header
-    icon = "✅" if result.no_action_needed else "🔍"
+    icon = "" if result.no_action_needed else ""
     blocks.append({
         "type": "header",
         "text": {"type": "plain_text", "text": f"{icon} Investigation Complete"},
@@ -711,7 +711,7 @@ def build_investigation_card(
     if result.no_action_needed:
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": "✅ Account looks healthy — no action required."},
+            "text": {"type": "mrkdwn", "text": "Account looks healthy — no action required."},
         })
         return blocks
 
@@ -740,7 +740,7 @@ def build_investigation_card(
                 detail_parts.append(f"tier={action_intent['tier']}")
             if action_intent.get("quota_id"):
                 detail_parts.append(f"quota_id={action_intent['quota_id']}")
-            detail_str = " · ".join(detail_parts)
+            detail_str = "·".join(detail_parts)
 
             description = f"`{action_type}` for `{email}`"
             if detail_str:
@@ -753,7 +753,7 @@ def build_investigation_card(
                 "text": {"type": "mrkdwn", "text": f"*{i + 1}. {label}*\n{description}"},
                 "accessory": {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": "✅ Confirm"},
+                    "text": {"type": "plain_text", "text": "Confirm"},
                     "style": "primary",
                     "action_id": "confirm_action",
                     "value": pending_id,
@@ -786,7 +786,7 @@ def build_investigation_card(
 def _fmt_step(step: dict) -> str:
     action = step.get("action", "")
     email = step.get("target_email", "")
-    pre = " _(auto, read-only)_" if step.get("pre_confirm") else ""
+    pre = "_(auto, read-only)_" if step.get("pre_confirm") else ""
     parts = [f"`{action}`"]
     if email:
         parts.append(f"`{_slack_email(email)}`")
@@ -802,12 +802,12 @@ def _fmt_step(step: dict) -> str:
         parts.append(f"quota_id=`{step['quota_id']}`")
     if step.get("target_emails"):
         parts.append(f"{len(step['target_emails'])} users")
-    return " · ".join(parts) + pre
+    return "·".join(parts) + pre
 
 
 def build_plan_card(plan: dict, pending_id: str) -> list:
     blocks = []
-    blocks.append({"type": "header", "text": {"type": "plain_text", "text": "📋 Workflow Plan"}})
+    blocks.append({"type": "header", "text": {"type": "plain_text", "text": "Workflow Plan"}})
     if plan.get("summary"):
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": plan["summary"]}})
     blocks.append({"type": "divider"})
@@ -817,11 +817,11 @@ def build_plan_card(plan: dict, pending_id: str) -> list:
             continue
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Step {step.get('step','?')}:* {_fmt_step(step)}"},
+            "text": {"type": "mrkdwn", "text": f"*Step {step.get('step','')}:* {_fmt_step(step)}"},
         })
     pre_steps = [s for s in steps if s.get("pre_confirm")]
     if pre_steps:
-        pre_desc = ", ".join(f"`{s['action']}`" for s in pre_steps)
+        pre_desc = ",".join(f"`{s['action']}`" for s in pre_steps)
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"_Auto-runs before execution: {pre_desc}_"}]})
     # Show guardrail warnings on the plan card
     guardrails = plan.get("guardrails_applied", [])
@@ -833,9 +833,9 @@ def build_plan_card(plan: dict, pending_id: str) -> list:
     blocks.append({
         "type": "actions",
         "elements": [
-            {"type": "button", "text": {"type": "plain_text", "text": "✅ Confirm"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Confirm"},
              "style": "primary", "action_id": "confirm_plan", "value": pending_id},
-            {"type": "button", "text": {"type": "plain_text", "text": "❌ Cancel"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Cancel"},
              "style": "danger", "action_id": "cancel_plan", "value": pending_id},
         ],
     })
@@ -845,7 +845,7 @@ def build_plan_card(plan: dict, pending_id: str) -> list:
 
 
 def build_execution_complete_card(completed: list, audit_ids: list, actor_slack_id: str, elapsed_s: float) -> list:
-    blocks = [{"type": "header", "text": {"type": "plain_text", "text": "✅ Workflow Complete"}}]
+    blocks = [{"type": "header", "text": {"type": "plain_text", "text": "Workflow Complete"}}]
     warnings = []
     for sr in completed:
         if sr.step.get("pre_confirm"):
@@ -868,21 +868,21 @@ def build_execution_complete_card(completed: list, audit_ids: list, actor_slack_
                 for i in range(0, len(fields), 10):
                     blocks.append({"type": "section", "fields": fields[i:i+10]})
     blocks.append({"type": "divider"})
-    audit_str = " · ".join(f"`{a}`" for a in audit_ids if not a.startswith("err_"))
+    audit_str = "·".join(f"`{a}`" for a in audit_ids if not a.startswith("err_"))
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
         "text": f"Confirmed by <@{actor_slack_id}> · {elapsed_s:.1f}s · {audit_str}"}]})
     return blocks
 
 
 def build_execution_failure_card(completed: list, failed: object, remaining_steps: list, recovery_pending_id: str) -> list:
-    blocks = [{"type": "header", "text": {"type": "plain_text", "text": "⚠️ Workflow Partially Failed"}}]
+    blocks = [{"type": "header", "text": {"type": "plain_text", "text": "Workflow Partially Failed"}}]
     for sr in completed:
         if sr.step.get("pre_confirm"):
             continue
         blocks.append({"type": "section",
             "text": {"type": "mrkdwn", "text": f"✅ Step {sr.step_num}: {_fmt_step(sr.step)}"}})
     err_msg = getattr(failed, "result", {}).get("error", "Unknown error")
-    step_num = getattr(failed, "step_num", "?")
+    step_num = getattr(failed, "step_num", "")
     step_dict = getattr(failed, "step", {})
     blocks.append({"type": "section",
         "text": {"type": "mrkdwn", "text": f"❌ Step {step_num}: {_fmt_step(step_dict)}\n  _{err_msg}_"}})
@@ -890,12 +890,12 @@ def build_execution_failure_card(completed: list, failed: object, remaining_step
         blocks.append({"type": "divider"})
         for step in remaining_steps:
             blocks.append({"type": "section",
-                "text": {"type": "mrkdwn", "text": f"⏭ Step {step.get('step','?')}: {_fmt_step(step)} _(skipped)_"}})
+                "text": {"type": "mrkdwn", "text": f"⏭ Step {step.get('step','')}: {_fmt_step(step)} _(skipped)_"}})
         blocks.append({"type": "divider"})
         blocks.append({"type": "actions", "elements": [
             {"type": "button", "text": {"type": "plain_text", "text": "🔁 Retry remaining"},
              "style": "primary", "action_id": "confirm_plan", "value": recovery_pending_id},
-            {"type": "button", "text": {"type": "plain_text", "text": "❌ Abandon"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Abandon"},
              "style": "danger", "action_id": "cancel_plan", "value": recovery_pending_id},
         ]})
     return blocks

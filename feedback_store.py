@@ -50,12 +50,12 @@ def _conn() -> sqlite3.Connection:
             channel     TEXT NOT NULL,
             thread_ts   TEXT NOT NULL,
             raw_text    TEXT NOT NULL,
-            sentiment   TEXT NOT NULL DEFAULT 'neutral',
-            extracted   TEXT NOT NULL DEFAULT '',
-            pending_id  TEXT NOT NULL DEFAULT '',
-            env         TEXT NOT NULL DEFAULT 'dev'
+            sentiment   TEXT NOT NULL DEFAULT'neutral',
+            extracted   TEXT NOT NULL DEFAULT'',
+            pending_id  TEXT NOT NULL DEFAULT'',
+            env         TEXT NOT NULL DEFAULT'dev'
         )
-    """)
+   """)
     conn.commit()
     return conn
 
@@ -66,23 +66,23 @@ def _conn() -> sqlite3.Connection:
 
 _FEEDBACK_TRIGGERS = re.compile(
     r"\b("
-    r"feedback[:\-]?|this is (wrong|incorrect|broken|bad|off)|"
-    r"that('s| is| was| didn'?t)? (wrong|incorrect|broken|not right|not what|off|terrible|bad)|"
+    r"feedback[:\-]|this is (wrong|incorrect|broken|bad|off)|"
+    r"that('s| is| was| didn't) (wrong|incorrect|broken|not right|not what|off|terrible|bad)|"
     r"not what i (wanted|asked|meant|expected)|"
     r"you (missed|misunderstood|got it wrong|screwed up|messed up)|"
     r"(wrong|incorrect|bad) (email|amount|tier|user|account|plan|action)|"
     r"(issue|problem|bug|error)[:\-]|"
-    r"(this|that) (doesn'?t|didn'?t) work|"
-    r"(please |can you )?fix (this|that)|"
+    r"(this|that) (doesn't|didn't) work|"
+    r"(please |can you )fix (this|that)|"
     r"(great|perfect|good job|well done|nice|love it|works great|exactly right|"
-    r"thank(s| you)|that'?s? (it|right|correct|perfect)|awesome)"
+    r"thank(s| you)|that's (it|right|correct|perfect)|awesome)"
     r")\b",
     re.IGNORECASE,
 )
 
 
 def is_feedback_intent(text: str) -> bool:
-    """Heuristic: does this utterance look like feedback rather than an action request?"""
+    """Heuristic: does this utterance look like feedback rather than an action request"""
     return bool(_FEEDBACK_TRIGGERS.search(text))
 
 
@@ -94,11 +94,11 @@ _EXTRACT_SYSTEM = """\
 You are a feedback parser for Jarvis, an internal Slack bot that manages HeyGen user accounts.
 
 Given a user message, extract:
-1. sentiment: "positive", "negative", or "neutral"
+1. sentiment:"positive","negative", or"neutral"
 2. extracted: a clean 1-2 sentence summary of the feedback, stripped of filler. If the user is \
 praising, say what they liked. If complaining, say what was wrong. Keep it factual.
 
-Respond ONLY with valid JSON: {"sentiment": "...", "extracted": "..."}
+Respond ONLY with valid JSON: {"sentiment":"...","extracted":"..."}
 """
 
 
@@ -151,7 +151,7 @@ def write_feedback(
         conn.execute(
             """INSERT INTO jarvis_feedback
                (id, ts, user_id, channel, thread_ts, raw_text, sentiment, extracted, pending_id, env)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (, , , , , , , , , )""",
             (fb_id, ts, user_id, channel, thread_ts, raw_text, sentiment, extracted, pending_id, env),
         )
     return fb_id
@@ -162,12 +162,12 @@ def list_feedback(limit: int = 20, env: str | None = None) -> list[dict[str, Any
     conn = _conn()
     if env:
         rows = conn.execute(
-            "SELECT * FROM jarvis_feedback WHERE env=? ORDER BY ts DESC LIMIT ?",
+            "SELECT * FROM jarvis_feedback WHERE env= ORDER BY ts DESC LIMIT",
             (env, limit),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM jarvis_feedback ORDER BY ts DESC LIMIT ?",
+            "SELECT * FROM jarvis_feedback ORDER BY ts DESC LIMIT",
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]

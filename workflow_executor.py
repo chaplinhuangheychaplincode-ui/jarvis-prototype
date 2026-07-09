@@ -76,7 +76,7 @@ def execute_workflow(
         message_ts: for audit
         progress_cb: called with short status strings
         pre_confirm_only: if True, only run steps with pre_confirm=True
-    """
+   """
     steps = plan.get("steps", [])
     if pre_confirm_only:
         steps = [s for s in steps if s.get("pre_confirm", False)]
@@ -88,7 +88,7 @@ def execute_workflow(
     for step in steps:
         action = step.get("action", "")
         email = step.get("target_email", "")
-        step_num = step.get("step", "?")
+        step_num = step.get("step", "")
 
         if progress_cb:
             display_email = email.replace("@", "\u200b@")  # zero-width space prevents Slack auto-linking

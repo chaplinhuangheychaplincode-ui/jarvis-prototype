@@ -4,13 +4,13 @@ Jarvis bot — Socket Mode event handler.
 Flow:
   1. @mention received (any user) → parse intent
   2a. needs_clarification → post question, wait for reply
-  2b. confidence OK → fetch before_state, post dry-run card with Block Kit ✅/❌ buttons
-  3. ✅ button → re-snapshot, execute, write audit, ack
-     ❌ button → cancel pending (BUG-1/2 fix: buttons, not emoji reactions)
+  2b. confidence OK → fetch before_state, post dry-run card with Block Kit / buttons
+  3.  button → re-snapshot, execute, write audit, ack
+      button → cancel pending (BUG-1/2 fix: buttons, not emoji reactions)
 
 Bugs fixed in this version:
   BUG-1: Cancel reaction didn't cancel → buttons properly route to cancel_action
-  BUG-2: Emoji reactions → Block Kit interactive buttons (✅/❌)
+  BUG-2: Emoji reactions → Block Kit interactive buttons (/)
   BUG-3: create_account had no confirm loop → routes through same dry-run flow
   BUG-4: Slow response → claude-haiku for intent parse; no agentic loop
   BUG-5: Duplicate execution → atomic claim_pending() before execute
@@ -76,8 +76,8 @@ JARVIS_LOG_CHANNEL = os.environ.get("JARVIS_LOG_CHANNEL", "")
 # ---------------------------------------------------------------------------
 
 _ACTION_EMOJI = {
-    "lookup":         "🔍",
-    "quota_grant":    "💳",
+    "lookup":         "",
+    "quota_grant":    "",
     "bulk_grant":     "📦",
     "create_account": "🆕",
     "ent_sub_grant":  "🏢",
@@ -95,8 +95,8 @@ def _post_to_log_channel(
     """Post a one-line audit entry to JARVIS_LOG_CHANNEL (if configured)."""
     if not JARVIS_LOG_CHANNEL:
         return
-    emoji = _ACTION_EMOJI.get(action, "⚙️")
-    result_tag = "✅" if result == "success" else "❌"
+    emoji = _ACTION_EMOJI.get(action, "⚙")
+    result_tag = "" if result == "success" else ""
     batch_suffix = f" · batch `{batch_id}`" if batch_id else ""
     text = (
         f"{result_tag} {emoji} *{action}* | `{target_email}` "
@@ -227,7 +227,7 @@ def handle_explain(channel: str, thread_ts: str) -> None:
         desc = op.get("description", "")
         example = op.get("example", "")
         write = op.get("write", False)
-        tag = " _(write op — requires confirmation)_" if write else " _(read-only)_"
+        tag = "_(write op — requires confirmation)_" if write else "_(read-only)_"
         blocks.append({
             "type": "section",
             "text": {
@@ -247,7 +247,7 @@ def handle_explain(channel: str, thread_ts: str) -> None:
     blocks.append({"type": "divider"})
     blocks.append({
         "type": "section",
-        "text": {"type": "mrkdwn", "text": f"_Capabilities last updated: {data.get('version', '?')}_"},
+        "text": {"type": "mrkdwn", "text": f"_Capabilities last updated: {data.get('version', '')}_"},
     })
 
     post_message(channel, "Here's what I can help with:", thread_ts=thread_ts, blocks=blocks)
@@ -262,14 +262,14 @@ def _process_utterance(
     """
     Core logic: NL utterance → workflow plan → PLANNING state.
     Used by @mention handler. Thread replies in PLANNING go to _handle_planning_reply.
-    """
+   """
     import uuid as _uuid
 
     conv = get_conversation(thread_ts)
     history: list[dict[str, str]] = conv["messages"] if conv else []
     history = conv_append(thread_ts, channel, "user", clean_text)
 
-    thinking_resp = post_message(channel, "⏳ Thinking...", thread_ts=thread_ts)
+    thinking_resp = post_message(channel, "Thinking...", thread_ts=thread_ts)
     thinking_ts = thinking_resp.get("ts", "")
 
     # Question intent short-circuit — answer inline without building a workflow plan
@@ -310,7 +310,7 @@ def _process_utterance(
                     pending_id=pid,
                 )
                 sentiment = result.get("sentiment", "neutral")
-                emoji = "🙏" if sentiment == "positive" else "📝"
+                emoji = "" if sentiment == "positive" else ""
                 print(f"[FEEDBACK] {fb_id} sentiment={sentiment} text={result.get('extracted','')[:80]}", flush=True)
                 # Post to log channel if configured
                 _post_to_log_channel(
@@ -320,9 +320,9 @@ def _process_utterance(
                 print(f"[FEEDBACK] log error: {exc}", flush=True)
         _threading.Thread(target=_log_feedback, daemon=True).start()
         ack = (
-            "Thanks for the feedback — logged it for the team to review! 📝"
+            "Thanks for the feedback — logged it for the team to review!"
             if not any(w in clean_text.lower() for w in ("great", "good job", "perfect", "love", "awesome", "well done", "thank"))
-            else "Glad to hear it! 🙌 Noted."
+            else "Glad to hear it!  Noted."
         )
         post_message(channel, ack, thread_ts=thread_ts)
         # Stay in current state so the user can continue if they want
@@ -344,7 +344,7 @@ def _process_utterance(
     # Investigate bypass
     if steps and steps[0].get("action") == "investigate":
         if thinking_ts:
-            update_message(channel, thinking_ts, "🔍 Investigating...")
+            update_message(channel, thinking_ts, "Investigating...")
         target_email = steps[0].get("target_email", "")
         question = steps[0].get("reason") or clean_text
         _progress_ts: list[str] = [thinking_ts]
@@ -363,7 +363,7 @@ def _process_utterance(
             pending_ids.append(pid)
         card_blocks = build_investigation_card(result, pending_ids)
         if thinking_ts:
-            update_message(channel, thinking_ts, "✅ Investigation complete")
+            update_message(channel, thinking_ts, "Investigation complete")
         resp = post_message(channel, f"🔍 Investigation for `{target_email}`",
                             thread_ts=thread_ts, blocks=card_blocks)
         for pid in pending_ids:
@@ -383,7 +383,7 @@ def _process_utterance(
             post_message(channel, answer, thread_ts=thread_ts)
             return
         question = plan.get("clarifying_question") or (
-            "I'm not sure I understood that. Could you rephrase with the target email, action, amount, and duration?"
+            "I'm not sure I understood that. Could you rephrase with the target email, action, amount, and duration"
         )
         conv_append(thread_ts, channel, "assistant", question)
         updated_conv = get_conversation(thread_ts)
@@ -400,7 +400,7 @@ def _process_utterance(
     before_states: dict[str, Any] = {}
     if pre_steps:
         if thinking_ts:
-            update_message(channel, thinking_ts, "🔍 Fetching account info...")
+            update_message(channel, thinking_ts, "Fetching account info...")
         for pre_step in pre_steps:
             email = pre_step.get("target_email", "")
             try:
@@ -463,7 +463,7 @@ def _handle_planning_reply(
 
     history = conv_append(thread_ts, channel, "user", clean_text)
 
-    thinking_resp = post_message(channel, "⏳ Thinking...", thread_ts=thread_ts)
+    thinking_resp = post_message(channel, "Thinking...", thread_ts=thread_ts)
     thinking_ts = thinking_resp.get("ts", "")
 
     refine_result = refine_workflow(
@@ -476,7 +476,7 @@ def _handle_planning_reply(
     rtype = refine_result.get("type", "clarify")
 
     if rtype == "answer":
-        answer = refine_result.get("answer", "I'm not sure — could you rephrase?")
+        answer = refine_result.get("answer", "I'm not sure — could you rephrase")
         conv_append(thread_ts, channel, "assistant", answer)
         if thinking_ts:
             delete_message(channel, thinking_ts)
@@ -496,7 +496,7 @@ def _handle_planning_reply(
             if old_card_ts:
                 delete_message(channel, old_card_ts)
             resp = post_message(
-                channel, "📋 Updated plan — review and confirm:",
+                channel, "Updated plan — review and confirm:",
                 thread_ts=thread_ts,
                 blocks=build_plan_card(updated_plan, pending_id),
             )
@@ -512,15 +512,15 @@ def _handle_planning_reply(
                 message_ts=card_ts,
                 pending_id=pending_id,
             )
-            post_message(channel, "✅ Plan updated — review above and click Confirm when ready.",
+            post_message(channel, "Plan updated — review above and click Confirm when ready.",
                          thread_ts=thread_ts)
         else:
             if thinking_ts:
                 delete_message(channel, thinking_ts)
-            post_message(channel, "⚠️ Could not update plan — please try again.", thread_ts=thread_ts)
+            post_message(channel, "Could not update plan — please try again.", thread_ts=thread_ts)
 
     else:  # clarify
-        question = refine_result.get("clarifying_question", "Could you clarify that?")
+        question = refine_result.get("clarifying_question", "Could you clarify that")
         conv_append(thread_ts, channel, "assistant", question)
         if thinking_ts:
             delete_message(channel, thinking_ts)
@@ -543,12 +543,12 @@ def handle_mention(event: dict[str, Any]) -> None:
     print(f"[MENTION] {user_id} in {channel}: {clean_text}")
 
     # Raw CLI escape hatch
-    if clean_text.startswith("!raw "):
-        post_message(channel, "🔧 Raw CLI mode — bypassing NL parse. _(not yet wired)_", thread_ts=thread_ts)
+    if clean_text.startswith("!raw"):
+        post_message(channel, "Raw CLI mode — bypassing NL parse. _(not yet wired)_", thread_ts=thread_ts)
         return
 
     # Audit query (read-only, bypass conversation flow)
-    if clean_text.lower().startswith("audit "):
+    if clean_text.lower().startswith("audit"):
         target_email = clean_text[6:].split()[0]
         rows = query_audit(target_email=target_email, limit=5)
         if not rows:
@@ -568,7 +568,7 @@ def handle_mention(event: dict[str, Any]) -> None:
         else:
             lines = [f"*Last {len(rows)} feedback entries:*"]
             for r in rows:
-                emoji = "🙏" if r["sentiment"] == "positive" else ("😞" if r["sentiment"] == "negative" else "📝")
+                emoji = "" if r["sentiment"] == "positive" else ("" if r["sentiment"] == "negative" else "")
                 lines.append(
                     f"{emoji} `{r['id']}` <@{r['user_id']}> | *{r['sentiment']}* | {r['ts'][:16]}\n"
                     f"  _{r['extracted'] or r['raw_text'][:80]}_"
@@ -603,7 +603,7 @@ def handle_mention(event: dict[str, Any]) -> None:
                 if last.get("product"): parts.append(f"product={last['product']}")
                 if last.get("amount"):  parts.append(f"amount={last['amount']}")
                 if last.get("duration_days"): parts.append(f"duration_days={last['duration_days']}")
-                marker = "[Prior completed op: " + ", ".join(parts) + "]"
+                marker = "[Prior completed op:" + ",".join(parts) + "]"
                 seed_messages = [{"role": "system", "text": marker, "ts": ""}]
             elif fi:
                 email   = fi.get("target_email", "")
@@ -613,7 +613,7 @@ def handle_mention(event: dict[str, Any]) -> None:
                 parts = [f"action={action}", f"email={email}"]
                 if tier:    parts.append(f"tier={tier}")
                 if product: parts.append(f"product={product}")
-                marker = "[Prior completed op: " + ", ".join(parts) + "]"
+                marker = "[Prior completed op:" + ",".join(parts) + "]"
                 seed_messages = [{"role": "system", "text": marker, "ts": ""}]
         upsert_conversation(thread_ts, channel, seed_messages, state="GATHERING")
 
@@ -624,7 +624,7 @@ def handle_thread_reply(event: dict[str, Any]) -> None:
     """
     Process a plain (non-@mention) message in a thread where Jarvis is GATHERING.
     Only fires if the thread has an active GATHERING conversation.
-    """
+   """
     # Ignore bot messages
     if event.get("bot_id") or event.get("subtype"):
         return
@@ -695,7 +695,7 @@ def _handle_plan_button(
                      thread_ts=thread_ts)
         return
 
-    update_message(channel_id, pending["message_ts"], "⏳ Executing workflow...",
+    update_message(channel_id, pending["message_ts"], "Executing workflow...",
                    blocks=[{"type": "section", "text": {"type": "mrkdwn",
                            "text": f"⏳ *Confirmed* by <@{user_id}> · executing..."}}])
 
@@ -749,7 +749,7 @@ def _handle_plan_button(
             recovery_id = ""
         update_message(
             channel_id, pending["message_ts"],
-            "⚠️ Workflow partially failed",
+            "Workflow partially failed",
             blocks=build_execution_failure_card(
                 exec_result.completed, exec_result.failed,
                 exec_result.remaining_steps, recovery_id,
@@ -761,7 +761,7 @@ def handle_block_action(body: dict[str, Any]) -> None:
     """
     Process Block Kit button actions.
     Handles both legacy confirm_action/cancel_action and new confirm_plan/cancel_plan.
-    """
+   """
     user_id = body.get("user", {}).get("id", "")
     channel_id = body.get("channel", {}).get("id", "")
     actions = body.get("actions", [])
@@ -850,7 +850,7 @@ def handle_block_action(body: dict[str, Any]) -> None:
                     )
                     post_message(
                         channel_id,
-                        "⚠️ State changed since dry-run. Updated preview above — click ✅ Confirm again.",
+                        "State changed since dry-run. Updated preview above — click  Confirm again.",
                         thread_ts=thread_ts,
                     )
                     return
@@ -1072,7 +1072,7 @@ def _run_bulk_grant(
     lines = [f"✅ *Bulk grant complete* — Batch `{batch_id}`"]
     lines.append(f"  ✓ *{len(success)}* succeeded")
     if failed:
-        fail_detail = ", ".join(f"`{e}` ({err})" for e, err in failed[:5])
+        fail_detail = ",".join(f"`{e}` ({err})" for e, err in failed[:5])
         if len(failed) > 5:
             fail_detail += f" … +{len(failed)-5} more"
         lines.append(f"  ✗ *{len(failed)}* failed: {fail_detail}")
@@ -1116,8 +1116,8 @@ def _expiry_sweep() -> None:
                 channel_id = row["channel_id"]
                 thread_ts = row["thread_ts"]
                 intent = json.loads(row["intent_json"])
-                action = intent.get("action", "?")
-                email = intent.get("target_email", "?")
+                action = intent.get("action", "")
+                email = intent.get("target_email", "")
                 print(f"[EXPIRE] {pending_id} action={action} email={email}")
                 try:
                     post_message(
@@ -1144,7 +1144,7 @@ def _expiry_sweep() -> None:
                     try:
                         post_message(
                             conv["channel_id"],
-                            "⏰ Conversation timed out — mention me again to start over.",
+                            "Conversation timed out — mention me again to start over.",
                             thread_ts=thread_ts,
                         )
                     except Exception as e:
@@ -1211,7 +1211,7 @@ if __name__ == "__main__":
     # Warm up Anthropic client at startup to avoid first-request cold start
     import workflow_parser as _wp
     _wp._get_client()
-    print("   Anthropic client: warmed up")
+    print("  Anthropic client: warmed up")
 
     # Start TTL expiry sweep in background
     sweep_t = threading.Thread(target=_expiry_sweep, daemon=True, name="expiry-sweep")
