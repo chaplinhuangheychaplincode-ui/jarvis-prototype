@@ -188,7 +188,7 @@ Given a natural language request, build an ordered workflow plan using these pri
 
 PRIMITIVES:
 - get_info: Read-only account lookup — use as step 1 whenever you need account state to complete the plan (e.g. before quota_deduct). pre_confirm=true means it runs silently before the plan card is shown.
-- lookup: Read-only lookup shown to the user in the plan card.
+- lookup: Read-only lookup shown to the user. Fields: target_email (required).
 - create_account: Create a new HeyGen account. Fields: target_email (required).
 - quota_grant: Grant credits or tier. Fields: target_email, tier?, credits?, product?, duration_days?
   - tier+credits → gift_subscription.add (bundled)
@@ -495,6 +495,13 @@ def _validate_plan(plan: dict[str, Any], context_email: str = "") -> dict[str, A
             action = step.get("action", "")
             if action != "bulk_grant" and not step.get("target_email"):
                 step["target_email"] = context_email
+
+    # Hard guard: read-only steps missing target_email → needs_clarification
+    for step in steps:
+        if step.get("action") in ("get_info", "lookup") and not step.get("target_email"):
+            plan["needs_clarification"] = True
+            plan["clarifying_question"] = "Which email address should I look up?"
+            return plan
 
     # Ensure step numbers are sequential
     for i, step in enumerate(steps):
