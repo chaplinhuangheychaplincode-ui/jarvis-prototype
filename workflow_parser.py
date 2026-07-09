@@ -268,6 +268,7 @@ def is_question_intent(utterance: str) -> bool:
     Quick heuristic: is this utterance a question rather than an action request?
     Used to short-circuit parse_workflow and route to answer_question instead.
     Strips informal lead-ins (yeah, so, ok, etc.) before checking.
+    Kept for backwards compat — callers should prefer classify_intent().
     """
     import re as _re
     text = utterance.strip().lower()
@@ -293,6 +294,83 @@ def is_question_intent(utterance: str) -> bool:
         "tell me ", "explain ",
     )
     return any(text.startswith(s) for s in question_starters)
+
+
+_CLASSIFY_SYSTEM = """\
+You are an intent classifier for Jarvis, HeyGen's internal ops Slack bot.
+
+Jarvis can perform these ACTIONS on HeyGen user accounts:
+- look up / get info on an account (tier, credits, quota, subscription)
+- create a new account
+- grant credits (generative_credit, plan_credit, etc.)
+- grant or change a subscription tier (free/creator/pro/business/enterprise)
+- revoke a subscription or quota grant
+- reduce/deduct credits from an account
+- bulk grant credits or tier to multiple users
+- investigate account issues
+
+Classify the user's message into exactly ONE of these intents:
+- "workflow"  — the user wants Jarvis to perform or look up something using the actions above
+- "question"  — a general knowledge or conversational question Jarvis can answer from context/facts (no CMS action needed)
+- "feedback"  — the user is expressing praise or complaint about Jarvis itself
+
+Rules:
+- If the message mentions an email address AND could map to any Jarvis action above → "workflow"
+- "how much credits does X have?" → "workflow" (lookup action)
+- "what tier is X on?" → "workflow" (lookup action)
+- "when do credits expire?" (no email, post-op question) → "question"
+- "what is a generative credit?" → "question"
+- "that was wrong", "great job", "feedback: ..." → "feedback"
+- When in doubt between workflow and question, prefer "workflow"
+
+Respond with ONLY the intent word: workflow, question, or feedback."""
+
+
+def classify_intent(
+    utterance: str,
+    history: list[dict] | None = None,
+    model: str = "claude-haiku-4-5",
+) -> str:
+    """
+    LLM-based intent classifier. Returns 'workflow', 'question', or 'feedback'.
+    Falls back to heuristic if the LLM call fails.
+    """
+    client = _get_client()
+    messages: list[Any] = []
+
+    # Seed with recent history for context (last 3 non-system messages)
+    if history:
+        recent = [m for m in history if m.get("role") != "system"][-3:]
+        for msg in recent:
+            role = "user" if msg.get("role") == "user" else "assistant"
+            messages.append({"role": role, "content": msg.get("text", "")})
+
+    messages.append({"role": "user", "content": utterance})
+
+    try:
+        resp = client.messages.create(
+            model=model,
+            max_tokens=10,
+            temperature=0,
+            system=_CLASSIFY_SYSTEM,
+            messages=messages,
+        )
+        for block in resp.content:
+            if block.type == "text":
+                result = block.text.strip().lower()
+                if result in ("workflow", "question", "feedback"):
+                    return result
+    except Exception as e:
+        print(f"[CLASSIFY] LLM failed, falling back to heuristic: {e}", flush=True)
+
+    # Heuristic fallback
+    from feedback_store import is_feedback_intent
+    if is_feedback_intent(utterance):
+        return "feedback"
+    if is_question_intent(utterance):
+        return "question"
+    return "workflow"
+
 
 
 def answer_question(

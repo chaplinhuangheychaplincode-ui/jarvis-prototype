@@ -49,7 +49,7 @@ from slack_client import (
 )
 import heygen_cms_api as heygen
 from investigator import investigate as run_investigation
-from workflow_parser import parse_workflow, refine_workflow, answer_question, is_question_intent
+from workflow_parser import parse_workflow, refine_workflow, answer_question, is_question_intent, classify_intent
 from workflow_executor import execute_workflow
 from conversation_store import (
     upsert_conversation, append_message as conv_append, get_conversation,
@@ -274,35 +274,29 @@ def _process_utterance(
     thinking_resp = post_message(channel, "Thinking...", thread_ts=thread_ts)
     thinking_ts = thinking_resp.get("ts", "")
 
-    # Question intent short-circuit — answer inline without building a workflow plan
-    # Works in GATHERING and also catches questions on new @mentions in DONE threads
-    # EXCEPTION: if the utterance contains an email address, it's an actionable request
-    # (e.g. "how much credits does foo@bar.com have?") — let parse_workflow handle it.
-    _contains_email = bool(__import__("re").search(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", clean_text))
-    if is_question_intent(clean_text) and not _contains_email:
-        # Include seed messages (system context / prior op marker) in history for QA
-        all_messages = conv["messages"] if conv else []
-        # history_for_qa = everything before the current user utterance (last element)
-        history_for_qa = all_messages[:-1] if len(all_messages) > 1 else (all_messages[:] if all_messages else None)
+    # LLM-based intent classification — replaces keyword heuristics
+    # classify_intent() returns 'workflow', 'question', or 'feedback'
+    all_messages = conv["messages"] if conv else []
+    history_for_qa = all_messages[:-1] if len(all_messages) > 1 else (all_messages[:] if all_messages else None)
+    intent = classify_intent(clean_text, history=history_for_qa)
+    print(f"[INTENT] {intent!r} — {clean_text[:80]}", flush=True)
+
+    if intent == "question":
         current_plan = conv.get("current_plan") if conv else None
         answer = answer_question(clean_text, history=history_for_qa, current_plan=current_plan)
         conv_append(thread_ts, channel, "assistant", answer)
         if thinking_ts:
             delete_message(channel, thinking_ts)
         post_message(channel, answer, thread_ts=thread_ts)
-        # Stay in current state — don't advance to PLANNING
         return
 
-    # Feedback short-circuit — log and acknowledge, don't try to plan
-    if is_feedback_intent(clean_text):
+    if intent == "feedback":
         if thinking_ts:
             delete_message(channel, thinking_ts)
-        # Extract sentiment + clean text in background (non-blocking)
         import threading as _threading
         def _log_feedback() -> None:
             try:
                 result = extract_feedback(clean_text)
-                # Find most recent pending_id for this thread (for correlation)
                 from pending_store import get_latest_pending_id_for_thread
                 pid = get_latest_pending_id_for_thread(thread_ts) or ""
                 fb_id = write_feedback(
@@ -315,11 +309,9 @@ def _process_utterance(
                     pending_id=pid,
                 )
                 sentiment = result.get("sentiment", "neutral")
-                emoji = "" if sentiment == "positive" else ""
                 print(f"[FEEDBACK] {fb_id} sentiment={sentiment} text={result.get('extracted','')[:80]}", flush=True)
-                # Post to log channel if configured
                 _post_to_log_channel(
-                    f"{emoji} Feedback `{fb_id}` from <@{user_id}> | {sentiment} | _{result.get('extracted', clean_text[:80])}_"
+                    f"Feedback `{fb_id}` from <@{user_id}> | {sentiment} | _{result.get('extracted', clean_text[:80])}_"
                 )
             except Exception as exc:
                 print(f"[FEEDBACK] log error: {exc}", flush=True)
@@ -327,11 +319,12 @@ def _process_utterance(
         ack = (
             "Thanks for the feedback — logged it for the team to review!"
             if not any(w in clean_text.lower() for w in ("great", "good job", "perfect", "love", "awesome", "well done", "thank"))
-            else "Glad to hear it!  Noted."
+            else "Glad to hear it! Noted."
         )
         post_message(channel, ack, thread_ts=thread_ts)
-        # Stay in current state so the user can continue if they want
         return
+
+    # intent == "workflow" — fall through to parse_workflow
 
     # Use new workflow parser
     plan = parse_workflow(clean_text, history=history[:-1] if len(history) > 1 else None)
