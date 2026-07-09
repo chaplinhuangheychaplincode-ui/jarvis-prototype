@@ -467,7 +467,7 @@ def _process_utterance(
     if steps and steps[0].get("action") == "explain":
         if thinking_ts:
             delete_message(channel, thinking_ts)
-        conv_set_state(thread_ts, "DONE")
+        # Stay GATHERING — thread is still live for follow-ups
         handle_explain(channel, thread_ts)
         return
 
@@ -498,7 +498,7 @@ def _process_utterance(
                             thread_ts=thread_ts, blocks=card_blocks)
         for pid in pending_ids:
             update_message_ts(pid, resp.get("ts", ""))
-        conv_set_state(thread_ts, "DONE")
+        # Stay GATHERING — investigation card may lead to follow-up actions
         return
 
     # Prefetch guard: catch conflicts before showing a HITL card
@@ -514,7 +514,7 @@ def _process_utterance(
             if thinking_ts:
                 delete_message(channel, thinking_ts)
             post_message(channel, msg, thread_ts=thread_ts)
-            conv_set_state(thread_ts, "DONE")
+            # Stay GATHERING — user may want to do something else for this account
             return
 
     # Clarification needed — or silent empty plan (fall back to Q&A)
@@ -567,7 +567,7 @@ def _process_utterance(
                 post_message(channel,
                              f"User `{email}` not found in HeyGen. Check the email and try again.",
                              thread_ts=thread_ts)
-                conv_set_state(thread_ts, "DONE")
+                # Stay GATHERING — user may retry with a corrected email
                 return
 
     # Transition to PLANNING — store plan, post plan card
