@@ -61,6 +61,8 @@ from conversation_store import (
 BOT_HTTP_PORT = int(os.environ.get("JARVIS_BOT_PORT", "8088"))
 BOT_HTTP_SECRET = os.environ.get("JARVIS_BOT_SECRET", "jarvis-internal-secret")
 CONFIDENCE_THRESHOLD = 0.70
+AUTO_EXECUTE_CONFIDENCE = 0.80   # read-only fast path — skip HITL above this threshold
+READ_ONLY_ACTIONS = frozenset({"get_info", "lookup"})
 JARVIS_ENV = os.environ.get("JARVIS_ENV", "dev")
 BOT_USER_ID = os.environ.get("JARVIS_BOT_USER_ID", "U0BERJGULPQ")   # overridden per env
 OWNER_SLACK_ID = "U0BBD6002R2"  # yichi.huang — audit log reference (write ops open to all)
@@ -395,6 +397,29 @@ def _process_utterance(
         post_message(channel, question, thread_ts=thread_ts, blocks=blocks)
         return
 
+    # Fast-execute path: all steps read-only + high confidence → skip HITL entirely
+    all_read_only = all(s.get("action") in READ_ONLY_ACTIONS for s in steps)
+    if all_read_only and plan.get("confidence", 0) >= AUTO_EXECUTE_CONFIDENCE:
+        if thinking_ts:
+            update_message(channel, thinking_ts, "Looking up...")
+        print(f"[AUTO_EXEC] read-only plan, confidence={plan.get('confidence'):.2f} — skipping HITL")
+        exec_result = execute_workflow(
+            plan=plan,
+            actor_slack_id=user_id,
+            channel_id=channel,
+            message_ts=thinking_ts,
+        )
+        if thinking_ts:
+            delete_message(channel, thinking_ts)
+        if exec_result.completed:
+            blocks = build_execution_complete_card(exec_result.completed, exec_result.audit_ids, user_id, 0)
+            post_message(channel, "Here's what I found:", thread_ts=thread_ts, blocks=blocks)
+        else:
+            post_message(channel, "Lookup failed — user may not exist or there was a CMS error.",
+                         thread_ts=thread_ts)
+        conv_set_state(thread_ts, "DONE")
+        return
+
     # Run pre-confirm steps (read-only, no HITL)
     pre_steps = [s for s in steps if s.get("pre_confirm")]
     before_states: dict[str, Any] = {}
@@ -410,7 +435,7 @@ def _process_utterance(
                     if thinking_ts:
                         delete_message(channel, thinking_ts)
                     post_message(channel,
-                                 f"❌ User `{email}` not found in HeyGen. Check the email and try again.",
+                                 f"User `{email}` not found in HeyGen. Check the email and try again.",
                                  thread_ts=thread_ts)
                     conv_set_state(thread_ts, "DONE")
                     return
