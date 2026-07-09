@@ -80,9 +80,9 @@ JARVIS_LOG_CHANNEL = os.environ.get("JARVIS_LOG_CHANNEL", "")
 _ACTION_EMOJI = {
     "lookup":         "",
     "quota_grant":    "",
-    "bulk_grant":     "📦",
-    "create_account": "🆕",
-    "ent_sub_grant":  "🏢",
+    "bulk_grant":     "",
+    "create_account": "",
+    "ent_sub_grant":  "",
 }
 
 
@@ -97,11 +97,11 @@ def _post_to_log_channel(
     """Post a one-line audit entry to JARVIS_LOG_CHANNEL (if configured)."""
     if not JARVIS_LOG_CHANNEL:
         return
-    emoji = _ACTION_EMOJI.get(action, "⚙")
-    result_tag = "" if result == "success" else ""
+    emoji = _ACTION_EMOJI.get(action, "")
+    result_tag = "" if result == "success" else "[FAIL]"
     batch_suffix = f" · batch `{batch_id}`" if batch_id else ""
     text = (
-        f"{result_tag} {emoji} *{action}* | `{target_email}` "
+        f"{result_tag} *{action}* | `{target_email}` "
         f"| by <@{actor_slack_id}> | audit `{audit_id}`{batch_suffix}"
     )
     try:
