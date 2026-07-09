@@ -407,6 +407,41 @@ def _process_utterance(
                                     account_context=account_ctx)
                 print(f"[PREFETCH] stored account_ctx for {raw_email} in thread {thread_ts}", flush=True)
 
+    # --- Retry detection: "try again" / "retry" → re-run classify on last user message ---
+    _RETRY_PHRASES = {"try again", "retry", "try again please", "please try again", "again"}
+    if clean_text.lower().strip() in _RETRY_PHRASES:
+        # Find the last non-retry user message from history and re-process it
+        last_real = None
+        for msg in reversed(history_for_qa or []):
+            if msg.get("role") == "user" and msg.get("text", "").lower().strip() not in _RETRY_PHRASES:
+                last_real = msg["text"]
+                break
+        if last_real:
+            print(f"[RETRY] re-processing: {last_real[:80]}", flush=True)
+            clean_text = last_real
+        # fall through with possibly updated clean_text
+
+    # --- Plan Q&A: if there's an active pending plan in this thread and the message
+    # looks like a question about the plan, route to refine_workflow instead of account answer ---
+    current_plan = conv.get("current_plan") if conv else None
+    if current_plan and account_ctx is not None:
+        plan_question_signals = [
+            "step", "what does", "what is step", "explain", "what will", "what happen",
+            "tell me more", "more detail", "clarify", "what's the plan", "the plan"
+        ]
+        lower_text = clean_text.lower()
+        if any(sig in lower_text for sig in plan_question_signals):
+            from workflow_parser import refine_workflow
+            refined = refine_workflow(clean_text, current_plan, history=history_for_qa)
+            rtype = refined.get("type", "")
+            if rtype == "answer" and refined.get("answer"):
+                reply = refined["answer"]
+                conv_append(thread_ts, channel, "assistant", reply)
+                if thinking_ts:
+                    delete_message(channel, thinking_ts)
+                post_message(channel, reply, thread_ts=thread_ts)
+                return
+
     # LLM-based intent classification — now receives live account data when available
     intent = classify_intent(clean_text, history=history_for_qa, account_context=account_ctx)
     print(f"[INTENT] {intent!r} — {clean_text[:80]}", flush=True)

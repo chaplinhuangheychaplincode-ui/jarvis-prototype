@@ -322,6 +322,7 @@ Rules:
 - "when do credits expire?" (no email, post-op context question) → "question"
 - "what is a generative credit?" → "question"
 - "that was wrong", "great job", "feedback: ..." → "feedback"
+- "try again", "retry", "again" → "workflow" (re-attempt last action, not feedback)
 - When in doubt between workflow and question, prefer "workflow"
 
 Respond with ONLY the intent word: answer, workflow, question, or feedback."""
