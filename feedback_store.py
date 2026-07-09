@@ -29,7 +29,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-_DB_PATH = os.environ.get("JARVIS_FEEDBACK_DB", "jarvis_feedback.sqlite")
+_suffix = "_prod" if os.environ.get("JARVIS_ENV") == "prod" else ""
+_DB_PATH = os.environ.get(
+    "JARVIS_FEEDBACK_DB",
+    os.path.expanduser(f"~/.hermes/jarvis_feedback{_suffix}.sqlite"),
+)
 
 # ---------------------------------------------------------------------------
 # Schema bootstrap
