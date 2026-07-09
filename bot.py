@@ -1347,21 +1347,12 @@ def _expiry_sweep() -> None:
         except Exception as e:
             print(f"[EXPIRE] sweep error: {e}")
 
-        # Also expire stale conversations
+        # Also expire stale conversations — silently, no message needed
         try:
             for conv in list_expired_conversations():
                 thread_ts = conv["thread_ts"]
                 expire_conversation(thread_ts)
                 print(f"[EXPIRE_CONV] thread {thread_ts} expired (state was {conv['state']})")
-                if conv["state"] == "GATHERING":
-                    try:
-                        post_message(
-                            conv["channel_id"],
-                            "Conversation timed out — mention me again to start over.",
-                            thread_ts=thread_ts,
-                        )
-                    except Exception as e:
-                        print(f"[EXPIRE_CONV] failed to post notice for {thread_ts}: {e}")
         except Exception as e:
             print(f"[EXPIRE_CONV] sweep error: {e}")
         threading.Event().wait(EXPIRY_SWEEP_INTERVAL)
