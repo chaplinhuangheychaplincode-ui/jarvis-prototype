@@ -339,8 +339,10 @@ def _process_utterance(
     thinking_resp = post_message(channel, "Thinking...", thread_ts=thread_ts)
     thinking_ts = thinking_resp.get("ts", "")
 
-    # Build history_for_qa early — needed for email fallback and classification
-    all_messages = conv["messages"] if conv else []
+    # Build history_for_qa from the post-append history (includes all prior messages).
+    # Strip the last entry (the current user message just appended) so history_for_qa
+    # only contains prior context — this is what the LLM uses for email fallback + QA.
+    all_messages = history  # conv_append returns the full updated messages list
     history_for_qa = all_messages[:-1] if len(all_messages) > 1 else (all_messages[:] if all_messages else None)
 
     # --- Prefetch account context if an email is present ---
