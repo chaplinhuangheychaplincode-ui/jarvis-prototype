@@ -578,7 +578,7 @@ def _process_utterance(
         plan_actions = {s.get("action") for s in steps}
         if "create_account" in plan_actions:
             msg = (
-                f"{_slack_email(raw_email)} already exists in HeyGen "
+                f"`{raw_email}` already exists in HeyGen "
                 f"(tier: {account_ctx.get('tier', 'unknown')}). "
                 f"Did you mean to update their account instead?"
             )
