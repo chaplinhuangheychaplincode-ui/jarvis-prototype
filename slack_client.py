@@ -43,8 +43,8 @@ def _call(method: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _slack_email(email: str) -> str:
-    """Prevent Slack from auto-linking email addresses by inserting a zero-width space."""
-    return email.replace("@", "\u200b@")
+    """Return email as-is — no zero-width spaces, so users can copy-paste safely."""
+    return email
 
 
 def post_message(channel: str, text: str, thread_ts: str | None = None,
