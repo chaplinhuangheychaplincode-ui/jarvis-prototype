@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 import anthropic
@@ -297,6 +298,243 @@ def _validate_intent(intent: dict[str, Any], utterance: str) -> dict[str, Any]:
             intent["confidence"] = 0.3
 
     return intent
+
+
+def _try_parse_cli(text: str) -> dict[str, Any] | None:
+    """
+    Fast-path CLI parser — no LLM, no API call.
+
+    Recognises well-formed command syntax and returns an intent dict with
+    confidence=1.0.  Returns None if the text doesn't match any known pattern,
+    which causes the caller to fall through to the LLM.
+
+    Supported syntax:
+        lookup <email>
+        vip <email> <credits> [--tier <tier>] [--days <days>] [--feature <feature>]
+        grant <email> <credits> [credits] [--tier <tier>] [--days <days>] [--feature <feature>]
+        create <email> [--tier <tier>] [--days <days>] [--credits <N>]
+        bulk grant <credits> credits <email> [<email> ...] [--tier <tier>] [--days <days>]
+        bulk grant credits=<N> <email> [<email> ...]
+    """
+    import shlex
+
+    # Normalise: strip leading whitespace, collapse internal whitespace
+    text = text.strip()
+
+    EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+    FEATURE_MAP = {
+        "credits": "generative_credit",
+        "generative": "generative_credit",
+        "generative_credit": "generative_credit",
+        "plan_credit": "plan_credit",
+        "plan": "plan_credit",
+        "api": "api",
+        "seat": "seat",
+        "seats": "seat",
+        "video_translate": "video_translate",
+        "avatar_video": "avatar_video",
+        "personalized_video": "personalized_video",
+    }
+    VALID_TIERS = {"creator", "pro", "business", "enterprise", "free"}
+
+    def _parse_flags(tokens: list[str]) -> dict:
+        """Extract --flag value pairs and positional leftovers from a token list."""
+        flags: dict[str, Any] = {}
+        positional: list[str] = []
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if tok.startswith("--"):
+                key = tok[2:]
+                if i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
+                    flags[key] = tokens[i + 1]
+                    i += 2
+                else:
+                    flags[key] = True
+                    i += 1
+            else:
+                positional.append(tok)
+                i += 1
+        return {"flags": flags, "positional": positional}
+
+    def _base(action: str, **kwargs) -> dict:
+        return {
+            "action": action,
+            "confidence": 1.0,
+            "needs_clarification": False,
+            "_cli": True,
+            **kwargs,
+        }
+
+    try:
+        # Tokenise safely (handles quoted strings)
+        tokens = shlex.split(text)
+    except ValueError:
+        tokens = text.split()
+
+    if not tokens:
+        return None
+
+    cmd = tokens[0].lower()
+    rest = tokens[1:]
+
+    # ── lookup <email> ─────────────────────────────────────────────────────────
+    if cmd == "lookup":
+        emails = EMAIL_RE.findall(" ".join(rest))
+        if emails:
+            return _base("lookup", target_email=emails[0])
+        return None
+
+    # ── vip / grant ────────────────────────────────────────────────────────────
+    if cmd in ("vip", "grant"):
+        parsed = _parse_flags(rest)
+        flags = parsed["flags"]
+        pos = parsed["positional"]
+
+        emails = EMAIL_RE.findall(" ".join(pos))
+        if not emails:
+            return None  # can't identify target — fall through to LLM
+
+        email = emails[0]
+        # Remove email tokens from positional so we can find the credit number
+        pos_no_email = [t for t in pos if not EMAIL_RE.fullmatch(t)]
+
+        credits: int | None = None
+        for tok in pos_no_email:
+            if tok.isdigit():
+                credits = int(tok)
+                break
+
+        tier = flags.get("tier") or flags.get("t")
+        if tier and tier.lower() not in VALID_TIERS:
+            tier = None  # bad tier — let LLM handle clarification
+
+        days = flags.get("days") or flags.get("d")
+        duration_days: int | None = None
+        if days:
+            try:
+                duration_days = int(days)
+            except ValueError:
+                pass
+
+        feature_raw = flags.get("feature") or flags.get("f") or "credits"
+        feature = FEATURE_MAP.get(feature_raw.lower(), "generative_credit")
+
+        if not credits and not tier:
+            return None  # ambiguous — no amount, no tier
+
+        intent = _base(
+            "quota_grant",
+            target_email=email,
+            product=feature,
+        )
+        if credits:
+            intent["credits"] = credits
+        if tier:
+            intent["tier"] = tier.lower()
+        if duration_days:
+            intent["duration_days"] = duration_days
+        return intent
+
+    # ── create <email> ─────────────────────────────────────────────────────────
+    if cmd == "create":
+        emails = EMAIL_RE.findall(" ".join(rest))
+        if not emails:
+            return None
+
+        parsed = _parse_flags(rest)
+        flags = parsed["flags"]
+
+        tier = flags.get("tier")
+        if tier and tier.lower() not in VALID_TIERS:
+            tier = None
+
+        days = flags.get("days")
+        duration_days = None
+        if days:
+            try:
+                duration_days = int(days)
+            except ValueError:
+                pass
+
+        credits_flag = flags.get("credits")
+        credits = None
+        if credits_flag:
+            try:
+                credits = int(credits_flag)
+            except ValueError:
+                pass
+
+        intent = _base("create_account", target_email=emails[0])
+        if tier:
+            intent["tier"] = tier.lower()
+        if credits:
+            intent["credits"] = credits
+        if duration_days:
+            intent["duration_days"] = duration_days
+        return intent
+
+    # ── bulk grant ─────────────────────────────────────────────────────────────
+    if cmd == "bulk" and rest and rest[0].lower() == "grant":
+        bulk_rest = rest[1:]  # drop "grant"
+        joined = " ".join(bulk_rest)
+
+        emails = EMAIL_RE.findall(joined)
+        if not emails:
+            return None
+
+        parsed = _parse_flags([t for t in bulk_rest if not EMAIL_RE.search(t)])
+        flags = parsed["flags"]
+        pos = parsed["positional"]
+
+        # Support: bulk grant 200 credits  OR  bulk grant credits=200
+        credits: int | None = None
+        for tok in pos:
+            if tok.isdigit():
+                credits = int(tok)
+                break
+        if credits is None:
+            for tok in pos:
+                if tok.lower().startswith("credits="):
+                    try:
+                        credits = int(tok.split("=")[1])
+                    except (IndexError, ValueError):
+                        pass
+
+        if credits is None and not flags.get("credits"):
+            return None  # no amount — fall through
+
+        if credits is None:
+            try:
+                credits = int(flags["credits"])
+            except (ValueError, TypeError):
+                return None
+
+        tier = flags.get("tier")
+        if tier and tier.lower() not in VALID_TIERS:
+            tier = None
+
+        days = flags.get("days")
+        duration_days = None
+        if days:
+            try:
+                duration_days = int(days)
+            except ValueError:
+                pass
+
+        intent = _base(
+            "bulk_grant",
+            target_emails=emails,
+            credits=credits,
+            product="generative_credit",
+        )
+        if tier:
+            intent["tier"] = tier.lower()
+        if duration_days:
+            intent["duration_days"] = duration_days
+        return intent
+
+    return None
 
 
 if __name__ == "__main__":

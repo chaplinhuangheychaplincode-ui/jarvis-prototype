@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from intent_parser import parse_intent
+from intent_parser import parse_intent, _try_parse_cli
 from pending_store import (
     claim_pending, get_by_pending_id, mark_cancelled, mark_executed,
     reset_to_pending, write_pending, list_expired_pending, expire_by_id,
@@ -453,8 +453,15 @@ def _process_utterance(
                 post_message(channel, reply, thread_ts=thread_ts)
                 return
 
+    # --- CLI fast path: bypass LLM for well-formed command syntax ---
+    # Returns None if unrecognised → falls through to LLM classify_intent.
+    # _cli=True tag is set on the returned intent for logging.
+    cli_intent = _try_parse_cli(clean_text)
+    if cli_intent:
+        print(f"[CLI_FAST] matched: {cli_intent!r}", flush=True)
+
     # LLM-based intent classification — now receives live account data when available
-    intent = classify_intent(clean_text, history=history_for_qa, account_context=account_ctx)
+    intent = cli_intent if cli_intent else classify_intent(clean_text, history=history_for_qa, account_context=account_ctx)
     print(f"[INTENT] {intent!r} — {clean_text[:80]}", flush=True)
 
     # "answer" — we have live account data and the question can be answered directly
