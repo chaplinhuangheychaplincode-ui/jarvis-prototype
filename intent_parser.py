@@ -437,10 +437,17 @@ def _try_parse_cli(text: str) -> dict[str, Any] | None:
         return intent
 
     # ── create <email> ─────────────────────────────────────────────────────────
-    if cmd == "create":
+    if cmd in ("create", "create_account") or (cmd == "create" and "account" in [t.lower() for t in rest]):
         emails = EMAIL_RE.findall(" ".join(rest))
         if not emails:
-            return None
+            # "create account" with no email → return a clarification intent rather than auto-generating
+            return {
+                "action": "create_account",
+                "confidence": 0.95,
+                "needs_clarification": True,
+                "clarifying_question": "What email address should I create the account for?",
+                "_cli": True,
+            }
 
         parsed = _parse_flags(rest)
         flags = parsed["flags"]
