@@ -1188,7 +1188,12 @@ def _execute_intent(intent: dict[str, Any]) -> dict[str, Any]:
     email = intent.get("target_email", "")
 
     if action == "lookup":
-        result = heygen.lookup_user(email)
+        space_id = intent.get("space_id")
+        if space_id:
+            # Space ID lookup — resolve to owner email then show full state
+            result = heygen.get_space_state(space_id)
+        else:
+            result = heygen.lookup_user(email)
         # Carry requested fields through so the card renderer can highlight them
         lookup_fields = intent.get("lookup_fields") or []
         if lookup_fields:

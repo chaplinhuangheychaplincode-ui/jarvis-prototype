@@ -209,6 +209,58 @@ def get_user_state(email: str) -> dict[str, Any]:
     }
 
 
+def get_space_state(space_id: str) -> dict[str, Any]:
+    """
+    Look up a workspace/space by its space_id via GET /v1/internal/space.
+    Chains into get_user_state for the owner to get full quota/tier info.
+    Always uses prod endpoint — dev doesn't support this endpoint.
+    """
+    import os as _os
+    # Force prod for space lookups regardless of JARVIS_ENV
+    prod_base = "https://cms-api.heygendev.com"
+    key = _get_api_key()
+    url = f"{prod_base}/v1/internal/space?space_id={space_id}"
+    print(f"[CMS] GET /v1/internal/space?space_id={space_id}", flush=True)
+    req = urllib.request.Request(url, headers={"x-api-key": key})
+    try:
+        resp_raw = urllib.request.urlopen(req, timeout=10)
+        resp = json.loads(resp_raw.read())
+    except urllib.error.HTTPError as e:
+        body = e.read()
+        try:
+            resp = json.loads(body)
+        except Exception:
+            resp = {"code": e.code, "message": body.decode()[:300]}
+    except Exception as e:
+        resp = {"code": -1, "message": str(e)}
+
+    if resp.get("code") != 100:
+        return {"space_id": space_id, "error": resp, "owner_email": None}
+
+    d = resp.get("data", {})
+    members = d.get("members", [])
+    owner = next(
+        (m for m in members if "super_admin" in m.get("role", "")),
+        members[0] if members else {},
+    )
+    owner_email = owner.get("email")
+    result = {
+        "space_id": space_id,
+        "name": d.get("name"),
+        "owner_email": owner_email,
+        "owner_username": d.get("owner_username"),
+        "seat_limit": d.get("seat_limit"),
+        "provision_source": d.get("provision_source"),
+        "ae_email": d.get("ae_email"),
+        "customer_email": d.get("customer_email"),
+        "trial_end_date": d.get("trial_end_date"),
+        "members": members,
+    }
+    if owner_email:
+        result["user_state"] = get_user_state(owner_email)
+    return result
+
+
 def lookup_user(email: str) -> dict[str, Any]:
     """Lookup user — read only."""
     return get_user_state(email)

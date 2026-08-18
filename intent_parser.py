@@ -378,11 +378,17 @@ def _try_parse_cli(text: str) -> dict[str, Any] | None:
     cmd = tokens[0].lower()
     rest = tokens[1:]
 
-    # ── lookup <email> ─────────────────────────────────────────────────────────
+    # ── lookup <email or space_id> ─────────────────────────────────────────────
     if cmd == "lookup":
-        emails = EMAIL_RE.findall(" ".join(rest))
+        joined = " ".join(rest)
+        emails = EMAIL_RE.findall(joined)
         if emails:
             return _base("lookup", target_email=emails[0])
+        # Check for bare hex space_id (32-char hex, no @)
+        hex_re = re.compile(r'\b([0-9a-f]{32})\b', re.IGNORECASE)
+        hex_ids = hex_re.findall(joined)
+        if hex_ids:
+            return _base("lookup", space_id=hex_ids[0])
         return None
 
     # ── vip / grant ────────────────────────────────────────────────────────────
